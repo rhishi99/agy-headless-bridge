@@ -101,7 +101,7 @@ def handle_request(req: dict) -> dict | None:
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "agy-headless-bridge", "version": "1.0.0"},
+                "serverInfo": {"name": "agy-headless-bridge", "version": "1.0.1"},
             },
         }
 

@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-06-13
+
+### Added
+- `server.json` + MCP-registry ownership token in the README, and a registry
+  publish step in CI — lists the server on the official MCP registry. No runtime
+  code change.
+
 ## [1.0.0] — 2026-06-13
 
 First public release.
@@ -39,5 +46,6 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.1
 [1.0.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.0

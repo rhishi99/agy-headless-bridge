@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.rhishi99/agy-headless-bridge",
+  "title": "Antigravity Headless Bridge",
+  "description": "Call the Google Antigravity CLI (agy) headlessly from any non-TTY context. Spawns agy in a fresh pseudo-terminal so its stdout isn't dropped, then strips ANSI/TUI chrome. Exposes agy_ask and agy_research.",
+  "version": "1.0.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "agy-headless-bridge",
+      "version": "1.0.1",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

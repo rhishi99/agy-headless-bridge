@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.rhishi99/agy-headless-bridge -->
+
 <div align="center">
 
 # agy-headless-bridge
