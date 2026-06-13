@@ -29,8 +29,8 @@ agy-bridge = "agy_headless_bridge.bridge:main"
 agy-mcp-server = "agy_headless_bridge.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/REPLACE_ME/agy-headless-bridge"
-Issues = "https://github.com/REPLACE_ME/agy-headless-bridge/issues"
+Homepage = "https://github.com/rhishi99/agy-headless-bridge"
+Issues = "https://github.com/rhishi99/agy-headless-bridge/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

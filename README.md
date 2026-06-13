@@ -11,6 +11,9 @@ Ships two things:
 2. **An MCP server** (`agy_headless_bridge.mcp_server`) — exposes `agy` as
    `agy_ask` / `agy_research` tools to any MCP client.
 
+> 📖 **[Architecture & docs page →](docs/index.html)** (open locally, or enable
+> GitHub Pages on `/docs` for a hosted version). Codename: **PtyGravity**.
+
 ---
 
 ## The problem (upstream bug [#76])
@@ -38,6 +41,20 @@ returns clean text.
 | Windows  | ConPTY via [`pywinpty`] (`PtyProcess`) — creates a new pty with no parent-tty requirement |
 | Linux / macOS | stdlib [`pty`] (`os.openpty` + `subprocess.Popen`) |
 
+```mermaid
+flowchart LR
+    A["Caller (non-TTY):<br/>Claude Code · MCP · subprocess · CI"] -->|prompt| B{{"run()"}}
+    B --> C["find_agy()<br/>$AGY_PATH → PATH → defaults"]
+    C --> D{"platform?"}
+    D -->|win32| E["pywinpty<br/>PtyProcess.spawn"]
+    D -->|posix| F["stdlib pty<br/>openpty + Popen"]
+    E --> G(["fresh pty"])
+    F --> G
+    G --> H["agy -p prompt<br/>sees a REAL tty → emits"]
+    H -->|raw bytes + ANSI/TUI chrome| I["clean()<br/>strip escapes · collapse repaints · drop glyphs"]
+    I -->|clean text| A
+```
+
 > **Why not just the popular `agy` Claude Code plugins?** They wrap `agy` for
 > *triggering* (slash commands, model selection) but still call `agy -p`
 > directly — so on Windows / headless they hit the exact same empty-output bug.
@@ -55,7 +72,7 @@ pip install agy-headless-bridge
 From source:
 
 ```bash
-git clone https://github.com/REPLACE_ME/agy-headless-bridge
+git clone https://github.com/rhishi99/agy-headless-bridge
 cd agy-headless-bridge
 pip install -e .
 ```
@@ -156,6 +173,6 @@ without Antigravity present.
 
 MIT — see [LICENSE](LICENSE).
 
-[#76]: https://github.com/google/antigravity/issues/76
+[#76]: https://antigravity.google/cli
 [`pywinpty`]: https://github.com/andfoy/pywinpty
 [`pty`]: https://docs.python.org/3/library/pty.html

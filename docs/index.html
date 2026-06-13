@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>agy-headless-bridge · PtyGravity</title>
+<meta name="description" content="Call the Google Antigravity CLI (agy) headlessly from any non-TTY context. Windows ConPTY + POSIX pty. Works around upstream bug #76." />
+<style>
+  :root{
+    --bg:#0a0b10; --bg2:#0f1118; --card:#13161f; --line:#222634;
+    --txt:#e7e9ef; --mut:#8b91a3; --dim:#5b6273;
+    --acc:#7c5cff; --acc2:#22d3ee; --good:#34d399; --bad:#f87171; --warn:#fbbf24;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono','Cascadia Code',Menlo,Consolas,monospace;
+    --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--acc2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:920px;margin:0 auto;padding:0 24px}
+  code,kbd{font-family:var(--mono);font-size:.88em}
+
+  /* hero */
+  .hero{position:relative;overflow:hidden;border-bottom:1px solid var(--line);
+    background:radial-gradient(900px 380px at 50% -120px,rgba(124,92,255,.22),transparent 70%),
+               radial-gradient(700px 320px at 90% 0,rgba(34,211,238,.12),transparent 65%),
+               var(--bg2)}
+  .hero .wrap{padding:80px 24px 64px;text-align:center}
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:5px 13px;border:1px solid var(--line);
+    border-radius:999px;background:rgba(255,255,255,.03);color:var(--mut);font-size:13px;margin-bottom:22px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 10px var(--good)}
+  h1{font-size:clamp(38px,7vw,68px);line-height:1.02;letter-spacing:-.03em;font-weight:800}
+  h1 .grad{background:linear-gradient(100deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .tag{margin-top:18px;font-size:clamp(16px,2.4vw,21px);color:var(--mut);max-width:640px;margin-left:auto;margin-right:auto}
+  .cta{margin-top:34px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{padding:11px 20px;border-radius:11px;font-weight:600;font-size:15px;border:1px solid var(--line);transition:.18s}
+  .btn.p{background:linear-gradient(100deg,var(--acc),#5b3cff);color:#fff;border-color:transparent}
+  .btn.p:hover{filter:brightness(1.12);text-decoration:none;transform:translateY(-1px)}
+  .btn.s{background:rgba(255,255,255,.03);color:var(--txt)}
+  .btn.s:hover{border-color:var(--acc2);text-decoration:none}
+
+  section{padding:64px 0;border-bottom:1px solid var(--line)}
+  .eyebrow{color:var(--acc);font-weight:600;font-size:13px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px}
+  h2{font-size:clamp(26px,4vw,36px);letter-spacing:-.02em;margin-bottom:14px;font-weight:750}
+  p.lead{color:var(--mut);font-size:17px;max-width:680px}
+  h3{font-size:19px;margin:26px 0 10px;font-weight:650}
+
+  /* code block */
+  pre{background:#0c0e15;border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;
+    font-family:var(--mono);font-size:13.5px;line-height:1.7;color:#cdd3e1;margin:14px 0}
+  pre .c{color:var(--dim)}
+  pre .k{color:var(--acc)}
+  pre .s{color:var(--good)}
+  pre .o{color:var(--bad)}
+  :not(pre)>code{background:rgba(124,92,255,.12);border:1px solid var(--line);padding:2px 6px;border-radius:6px;color:#cbb9ff}
+
+  /* before/after */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  @media(max-width:680px){.ba{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .panel.bad{border-color:rgba(248,113,113,.35)}
+  .panel.good{border-color:rgba(52,211,153,.35)}
+  .panel h4{font-size:14px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .pill{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px}
+  .pill.b{background:rgba(248,113,113,.15);color:var(--bad)}
+  .pill.g{background:rgba(52,211,153,.15);color:var(--good)}
+
+  /* mermaid */
+  .diagram{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 18px;margin-top:22px;overflow-x:auto}
+  .mermaid{display:flex;justify-content:center}
+  .cap{color:var(--dim);font-size:13px;text-align:center;margin-top:10px}
+
+  /* matrix table */
+  table{width:100%;border-collapse:collapse;margin-top:18px;font-size:14.5px}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  td code{font-size:12.5px}
+
+  /* feature grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:26px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;transition:.18s}
+  .feat:hover{border-color:rgba(124,92,255,.5);transform:translateY(-2px)}
+  .feat .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:19px;
+    background:linear-gradient(135deg,rgba(124,92,255,.25),rgba(34,211,238,.18));margin-bottom:12px}
+  .feat h4{font-size:16px;margin-bottom:6px}
+  .feat p{color:var(--mut);font-size:14px}
+
+  .note{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.3);border-left:3px solid var(--warn);
+    border-radius:10px;padding:14px 18px;margin-top:20px;color:#e8d9b0;font-size:14.5px}
+
+  footer{padding:40px 0;text-align:center;color:var(--dim);font-size:14px}
+  footer a{color:var(--mut)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge"><span class="dot"></span> works around upstream agy bug #76</span>
+    <h1>agy<span class="grad">·</span>headless<span class="grad">·</span>bridge</h1>
+    <p class="tag">Call the Google <strong>Antigravity CLI</strong> (<code>agy</code>) headlessly — from a subprocess, an MCP server, CI, or another coding agent — and actually get its output back. Codename <em>PtyGravity</em>.</p>
+    <div class="cta">
+      <a class="btn p" href="https://github.com/rhishi99/agy-headless-bridge">★ GitHub</a>
+      <a class="btn s" href="#install">Install</a>
+      <a class="btn s" href="#arch">Architecture</a>
+    </div>
+  </div>
+</header>
+
+<section id="problem">
+  <div class="wrap">
+    <div class="eyebrow">The problem</div>
+    <h2>agy goes silent when nobody's at the terminal</h2>
+    <p class="lead"><code>agy -p "&lt;prompt&gt;"</code> gates its stdout on <code>isatty()</code>. The moment stdout is <strong>not</strong> a real terminal — any automation — it prints nothing and exits <code>0</code>. No error, no output, just emptiness.</p>
+    <div class="ba">
+      <div class="panel bad">
+        <h4><span class="pill b">BEFORE</span> piped / subprocess</h4>
+        <pre><span class="c">$</span> agy -p <span class="s">"say hi"</span> | cat
+<span class="c">$</span>          <span class="c"># empty. exit 0. no error.</span></pre>
+        <p style="color:var(--mut);font-size:13.5px">The popular <code>winpty agy -p</code> workaround needs a terminal that <em>already exists</em> — so it still fails from a subprocess, MCP server, or CI runner.</p>
+      </div>
+      <div class="panel good">
+        <h4><span class="pill g">AFTER</span> through the bridge</h4>
+        <pre><span class="c">$</span> python -m agy_headless_bridge <span class="s">"say hi"</span>
+Hi! How can I help?</pre>
+        <p style="color:var(--mut);font-size:13.5px">A fresh pseudo-terminal is allocated and <code>agy</code> attached to it. It sees a real tty, emits normally; the bridge strips ANSI/TUI noise and returns clean text.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="wrap">
+    <div class="eyebrow">Architecture</div>
+    <h2>How a non-TTY caller gets clean output</h2>
+    <p class="lead">The bridge spawns <code>agy</code> attached to a brand-new pseudo-terminal that requires no pre-existing parent tty — so it works from anywhere.</p>
+
+    <div class="diagram">
+      <pre class="mermaid">
+flowchart LR
+    A["Caller<br/>(Claude Code · MCP client<br/>· subprocess · CI)"] -->|"prompt"| B{{"agy_headless_bridge.run()"}}
+    B --> C["find_agy()<br/>$AGY_PATH → PATH → OS defaults"]
+    C --> D{"sys.platform"}
+    D -->|win32| E["pywinpty<br/>PtyProcess.spawn"]
+    D -->|posix| F["stdlib pty<br/>os.openpty + Popen"]
+    E --> G(["fresh ConPTY"])
+    F --> H(["fresh /dev/pts"])
+    G --> I["agy -p prompt<br/>sees a REAL tty → emits"]
+    H --> I
+    I -->|"raw bytes + ANSI/TUI chrome"| J["clean()<br/>strip CSI/OSC · collapse \\r repaints · drop spinner glyphs"]
+    J -->|"clean text"| A
+
+    classDef br fill:#1b1740,stroke:#7c5cff,color:#e7e9ef;
+    classDef pty fill:#0c2730,stroke:#22d3ee,color:#e7e9ef;
+    classDef agy fill:#0f2a1e,stroke:#34d399,color:#e7e9ef;
+    class B,C,J br;
+    class E,F,G,H pty;
+    class I agy;
+      </pre>
+      <div class="cap">Data flow — same path on every platform, only the pty allocator differs.</div>
+    </div>
+
+    <h3>The tty handshake, step by step</h3>
+    <div class="diagram">
+      <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Caller (non-TTY)
+    participant B as bridge.run()
+    participant P as fresh PTY
+    participant A as agy -p
+
+    C->>B: run("prompt")
+    B->>B: find_agy() + pick allocator
+    B->>P: allocate pseudo-terminal
+    B->>A: spawn, stdout→PTY master
+    A->>A: isatty(stdout)==True ✓
+    A-->>P: streams answer + TUI chrome
+    loop until EOF / timeout
+        B->>P: read(4096)
+    end
+    B->>B: clean() — strip ANSI, collapse \r, drop glyphs
+    B-->>C: clean text
+      </pre>
+      <div class="cap">Bug #76 is an <code>isatty()</code> gate. Give agy a tty and it behaves.</div>
+    </div>
+  </div>
+</section>
+
+<section id="platform">
+  <div class="wrap">
+    <div class="eyebrow">Cross-platform</div>
+    <h2>One API, two pty backends</h2>
+    <table>
+      <thead><tr><th>Platform</th><th>Backend</th><th>Why</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Windows</td><td><code>pywinpty</code> · <code>PtyProcess</code></td><td>ConPTY allocates a new pty with no parent-tty requirement</td><td><span class="pill g">verified</span></td></tr>
+        <tr><td>Linux / macOS</td><td>stdlib <code>pty</code> · <code>os.openpty</code> + <code>Popen</code></td><td>No third-party dep on POSIX</td><td><span class="pill b">untested</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">⚠️ The POSIX path is implemented but not yet run on a real Linux/macOS box. Smoke-test it before relying on it — PRs/reports welcome.</div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="eyebrow">Quick start</div>
+    <h2>Install &amp; use</h2>
+    <p class="lead">You still need the Antigravity CLI itself installed and authenticated. The bridge locates it via <code>$AGY_PATH</code> → <code>PATH</code> → OS defaults.</p>
+
+    <h3>Install</h3>
+    <pre><span class="k">pip</span> install agy-headless-bridge
+<span class="c"># Windows pulls in pywinpty automatically; POSIX uses the stdlib pty module.</span></pre>
+
+    <h3>As a library</h3>
+    <pre><span class="k">from</span> agy_headless_bridge <span class="k">import</span> run
+print(run(<span class="s">"Explain a closure in one line."</span>))</pre>
+
+    <h3>As a CLI</h3>
+    <pre><span class="k">python</span> -m agy_headless_bridge <span class="s">"reply with exactly: OK"</span>
+<span class="c"># or the console script:</span>
+agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
+
+    <h3>As an MCP server (Claude Code, etc.)</h3>
+    <pre><span class="k">claude</span> mcp add --transport stdio antigravity -- \
+    python -m agy_headless_bridge.mcp_server</pre>
+    <p style="color:var(--mut);font-size:14px;margin-top:8px">Exposes two tools — <code>agy_ask</code> and <code>agy_research</code> — so your agent can delegate work to Antigravity / Gemini.</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">What's in the box</div>
+    <h2>Small, dependency-light, honest</h2>
+    <div class="grid">
+      <div class="feat"><div class="ic">🧩</div><h4>Library + CLI + MCP</h4><p><code>run()</code> API, an <code>agy-bridge</code> console script, and a JSON-RPC stdio MCP server — pick your entry point.</p></div>
+      <div class="feat"><div class="ic">🪶</div><h4>No MCP SDK</h4><p>Speaks JSON-RPC framing directly. Only dependency is <code>pywinpty</code>, and only on Windows.</p></div>
+      <div class="feat"><div class="ic">🧼</div><h4>Clean output</h4><p>Strips CSI/OSC escapes, collapses <code>\r</code> spinner repaints, drops box-drawing chrome — you get just the answer.</p></div>
+      <div class="feat"><div class="ic">⏱️</div><h4>Timeout-safe</h4><p>Configurable <code>AGY_BRIDGE_TIMEOUT</code>; kills a runaway agy and raises instead of hanging.</p></div>
+      <div class="feat"><div class="ic">🔎</div><h4>Auto-discovery</h4><p><code>$AGY_PATH</code> → <code>PATH</code> → OS default install locations. No hardcoded paths.</p></div>
+      <div class="feat"><div class="ic">✅</div><h4>Tested</h4><p>Unit tests for cleaning &amp; discovery always run; a live agy round-trip auto-skips when agy is absent.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="config">
+  <div class="wrap">
+    <div class="eyebrow">Reference</div>
+    <h2>Configuration</h2>
+    <table>
+      <thead><tr><th>Env var</th><th>Default</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>AGY_PATH</code></td><td>auto-detect</td><td>Absolute path to the <code>agy</code> binary</td></tr>
+        <tr><td><code>AGY_BRIDGE_TIMEOUT</code></td><td><code>180</code></td><td>Seconds before a call is killed</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:34px">Scope &amp; non-goals</h3>
+    <p class="lead" style="font-size:15.5px">Model selection (swapping Gemini Pro / Flash / Claude inside agy) is <strong>not</strong> handled here — that's an <code>agy</code> settings concern, already covered by the <code>antigravity-cc</code> Claude Code plugin (it patches <code>settings.json</code>). Pair the two. This bridge fixes the I/O layer they're missing; it does not install or authenticate <code>agy</code>.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>MIT licensed · <a href="https://github.com/rhishi99/agy-headless-bridge">github.com/rhishi99/agy-headless-bridge</a></p>
+    <p style="margin-top:6px">Not affiliated with Google. <em>Antigravity</em> and <em>agy</em> are Google products.</p>
+  </div>
+</footer>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad:true,
+    theme:'base',
+    themeVariables:{
+      background:'#13161f', primaryColor:'#1b1740', primaryTextColor:'#e7e9ef',
+      primaryBorderColor:'#7c5cff', lineColor:'#5b6273', secondaryColor:'#0c2730',
+      tertiaryColor:'#0f2a1e', fontSize:'14px',
+      fontFamily:"'Inter',-apple-system,'Segoe UI',sans-serif",
+      actorBkg:'#1b1740', actorBorder:'#7c5cff', actorTextColor:'#e7e9ef',
+      signalColor:'#8b91a3', signalTextColor:'#cdd3e1',
+      noteBkgColor:'#0c2730', noteTextColor:'#e7e9ef', noteBorderColor:'#22d3ee'
+    }
+  });
+</script>
+</body>
+</html>
