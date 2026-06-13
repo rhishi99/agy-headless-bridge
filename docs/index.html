@@ -128,6 +128,31 @@ Hi! How can I help?</pre>
         <p style="color:var(--mut);font-size:13.5px">A fresh pseudo-terminal is allocated and <code>agy</code> attached to it. It sees a real tty, emits normally; the bridge strips ANSI/TUI noise and returns clean text.</p>
       </div>
     </div>
+
+    <div class="diagram">
+      <pre class="mermaid">
+flowchart TB
+    subgraph BEF["❌ BEFORE — agy -p from any non-TTY caller"]
+        direction TB
+        a1["subprocess · MCP · CI · agent"] --> a2["agy -p prompt"]
+        a2 --> a3["stdout gated by isatty()"]
+        a3 --> a4["(empty string)<br/>exit 0 · no error · no output"]
+    end
+    subgraph AFT["✅ AFTER — through agy-headless-bridge"]
+        direction TB
+        b1["subprocess · MCP · CI · agent"] --> b2["run(prompt)"]
+        b2 --> b3["allocate fresh pseudo-terminal"]
+        b3 --> b4["agy -p prompt<br/>isatty() == True"]
+        b4 --> b5["clean() strips ANSI/TUI"]
+        b5 --> b6["clean text ✓"]
+    end
+    classDef bad fill:#2a1313,stroke:#f87171,color:#ffd9d9;
+    classDef good fill:#0f2a1e,stroke:#34d399,color:#d7ffe9;
+    class a1,a2,a3,a4 bad;
+    class b1,b2,b3,b4,b5,b6 good;
+      </pre>
+      <div class="cap">Before vs after — the empty-output gate, and the pty that defeats it.</div>
+    </div>
   </div>
 </section>
 
@@ -239,6 +264,62 @@ sequenceDiagram
         <tr><td>MCP server</td><td><code>python -m agy_headless_bridge.mcp_server</code></td><td>agents calling agy as a tool (<code>agy_ask</code> / <code>agy_research</code>)</td></tr>
       </tbody>
     </table>
+  </div>
+</section>
+
+<section id="prereq">
+  <div class="wrap">
+    <div class="eyebrow">Before you start</div>
+    <h2>Prerequisites</h2>
+    <p class="lead">This package only spawns the <code>agy</code> already on your machine — it ships no credentials and does not install or authenticate anything.</p>
+    <table>
+      <thead><tr><th>Need</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Python 3.9+</strong></td><td><code>python --version</code></td></tr>
+        <tr><td><strong>Antigravity CLI (<code>agy</code>)</strong></td><td>installed + authenticated — <a href="https://antigravity.google/cli">antigravity.google/cli</a>. Auth once interactively (browser OAuth) or set <code>ANTIGRAVITY_API_KEY</code>.</td></tr>
+        <tr><td><strong>Sanity check</strong></td><td>In a <em>real terminal</em>, <code>agy -p "say hi"</code> prints a reply. From a pipe it won't — that's the bug this fixes.</td></tr>
+        <tr><td><strong>Windows only</strong></td><td><code>pywinpty</code> (auto-installed). POSIX uses stdlib <code>pty</code> — nothing extra.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="usecases">
+  <div class="wrap">
+    <div class="eyebrow">Use cases</div>
+    <h2>Wire it into your AI coding tools</h2>
+    <p class="lead">Let one agent delegate work to Gemini via Antigravity, headlessly.</p>
+    <table>
+      <thead><tr><th>Use case</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Code asks Gemini for a second opinion / diff review</td><td>MCP server → <code>agy_ask</code></td></tr>
+        <tr><td>CI step runs an agy prompt and captures the answer</td><td><code>agy-bridge "..."</code> in the workflow</td></tr>
+        <tr><td>Python pipeline fans work out to agy</td><td><code>from agy_headless_bridge import run</code></td></tr>
+        <tr><td>Codex / any MCP-capable agent delegates to agy</td><td>register the same MCP server</td></tr>
+        <tr><td>Cron job summarizes logs via agy</td><td><code>agy-bridge</code> in the script</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Wire into Claude Code</h3>
+    <pre><span class="k">claude</span> mcp add --transport stdio antigravity -- \
+    python -m agy_headless_bridge.mcp_server</pre>
+    <div class="note">💬 <strong>Prompt to Claude Code:</strong> <em>"Use the <code>agy_ask</code> tool to ask Antigravity to review this function for edge cases, then summarize its findings."</em></div>
+    <p style="color:var(--mut);font-size:14px;margin-top:12px">Want <code>/agy:*</code> slash commands + model selection too? Pair with the community <code>antigravity-cc</code> plugin — it handles triggering &amp; model swap; this handles headless I/O.</p>
+
+    <h3>Wire into Codex / any MCP client</h3>
+    <pre>{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"antigravity"</span>: {
+      <span class="s">"command"</span>: <span class="s">"python"</span>,
+      <span class="s">"args"</span>: [<span class="s">"-m"</span>, <span class="s">"agy_headless_bridge.mcp_server"</span>]
+    }
+  }
+}</pre>
+    <div class="note">💬 <strong>Prompt to the agent:</strong> <em>"Call <code>agy_research</code> with the query 'idiomatic error handling in Rust' and turn the result into a checklist."</em></div>
+
+    <h3>From a shell / CI script</h3>
+    <pre><span class="k">ANSWER</span>=<span class="s">"$(agy-bridge 'Summarize the key risk in this diff in one sentence.')"</span>
+echo <span class="s">"$ANSWER"</span></pre>
   </div>
 </section>
 
