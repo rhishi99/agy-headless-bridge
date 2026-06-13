@@ -100,6 +100,13 @@
   <div class="wrap">
     <span class="badge"><span class="dot"></span> works around upstream agy bug #76</span>
     <h1>agy<span class="grad">·</span>headless<span class="grad">·</span>bridge</h1>
+    <p style="margin:18px 0 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <a href="https://pypi.org/project/agy-headless-bridge/"><img src="https://img.shields.io/pypi/v/agy-headless-bridge.svg?color=7c5cff" alt="PyPI"></a>
+      <a href="https://pypi.org/project/agy-headless-bridge/"><img src="https://img.shields.io/pypi/dm/agy-headless-bridge.svg?color=22d3ee" alt="PyPI downloads"></a>
+      <a href="https://registry.modelcontextprotocol.io/v0/servers?search=agy-headless-bridge"><img src="https://img.shields.io/badge/MCP_Registry-listed-7c5cff" alt="MCP Registry"></a>
+      <a href="https://github.com/rhishi99/agy-headless-bridge/actions/workflows/test.yml"><img src="https://github.com/rhishi99/agy-headless-bridge/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+      <img src="https://img.shields.io/badge/License-MIT-7c5cff.svg" alt="MIT">
+    </p>
     <p class="tag">Call the Google <strong>Antigravity CLI</strong> (<code>agy</code>) headlessly — from a subprocess, an MCP server, CI, or another coding agent — and actually get its output back. Codename <em>PtyGravity</em>.</p>
     <div class="cta">
       <a class="btn p" href="https://github.com/rhishi99/agy-headless-bridge">★ GitHub</a>
@@ -221,10 +228,10 @@ sequenceDiagram
       <thead><tr><th>Platform</th><th>Backend</th><th>Why</th><th>Status</th></tr></thead>
       <tbody>
         <tr><td>Windows</td><td><code>pywinpty</code> · <code>PtyProcess</code></td><td>ConPTY allocates a new pty with no parent-tty requirement</td><td><span class="pill g">verified</span></td></tr>
-        <tr><td>Linux / macOS</td><td>stdlib <code>pty</code> · <code>os.openpty</code> + <code>Popen</code></td><td>No third-party dep on POSIX</td><td><span class="pill b">untested</span></td></tr>
+        <tr><td>Linux / macOS</td><td>stdlib <code>pty</code> · <code>os.openpty</code> + <code>Popen</code></td><td>No third-party dep on POSIX</td><td>pty <span class="pill g">CI ✓</span> · agy <span class="pill b">beta</span></td></tr>
       </tbody>
     </table>
-    <div class="note">⚠️ The POSIX path is implemented but not yet run on a real Linux/macOS box. Smoke-test it before relying on it — PRs/reports welcome.</div>
+    <div class="note">⚠️ POSIX pty mechanics are <strong>verified on Linux CI</strong> (stub-driven). The real <code>agy</code> round-trip on macOS/Linux hasn't run on hardware yet — try it and <a href="https://github.com/rhishi99/agy-headless-bridge/issues/new/choose">report back</a>. PRs welcome.</div>
   </div>
 </section>
 
