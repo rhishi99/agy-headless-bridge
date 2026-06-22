@@ -109,12 +109,11 @@ flowchart TD
 | Platform | pty backend | Status |
 |---|---|---|
 | **Windows** | ConPTY via [`pywinpty`] (`PtyProcess`) | ✅ verified (agy 1.0.6) |
-| **Linux / macOS** | stdlib [`pty`] (`os.openpty` + `subprocess.Popen`) | 🧪 pty mechanics **verified on Linux CI** (stub-driven); **real `agy` round-trip untested on hardware** — [report results here](https://github.com/rhishi99/agy-headless-bridge/issues/new/choose) |
+| **Linux / macOS** | stdlib [`pty`] (`os.openpty` + `subprocess.Popen`) | ✅ verified on macOS hardware |
 
 > [!TIP]
-> **POSIX (macOS & Linux) users wanted.** The pty mechanics are verified on
-> Linux CI, but the real `agy` round-trip on POSIX hasn't been run on hardware.
-> If you're on macOS/Linux: `pip install agy-headless-bridge`, try it, and
+> **Linux users wanted.** The pty mechanics are verified on Linux CI and macOS hardware, but the real `agy` round-trip on bare-metal Linux hasn't been run.
+> If you're on Linux: `pip install agy-headless-bridge`, try it, and
 > [tell us how it went](https://github.com/rhishi99/agy-headless-bridge/issues/new/choose) — pass or fail. PRs welcome.
 
 > **Why not just the existing `agy` Claude Code plugins?** They wrap `agy` for
