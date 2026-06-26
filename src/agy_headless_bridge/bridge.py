@@ -433,9 +433,13 @@ def main(argv: list[str] | None = None) -> int:
     except AgyTimeoutError as exc:
         if exc.partial:
             print(exc.partial)  # surface partial work instead of dropping it
-        sys.stderr.write(
-            f"[agy-bridge] {exc}; partial output above; resume with 'agy -c'\n"
-        )
+            note = "partial output above"
+        else:
+            # Common on Windows: ConPTY batches output and flushes nothing
+            # before the kill, so there is no partial to show. Don't claim there
+            # is one.
+            note = "no partial output captured (none flushed before kill)"
+        sys.stderr.write(f"[agy-bridge] {exc}; {note}; resume with 'agy -c'\n")
         return 1
     except TimeoutError as exc:  # pragma: no cover - defensive
         sys.stderr.write(f"[agy-bridge] {exc}\n")

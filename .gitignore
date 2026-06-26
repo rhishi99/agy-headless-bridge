@@ -9,3 +9,4 @@ dist/
 venv/
 .env
 *.log
+*.stackdump
