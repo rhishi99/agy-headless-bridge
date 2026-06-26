@@ -40,7 +40,18 @@ import sys
 import threading
 import time
 
-DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "180"))
+# Hard ceiling (absolute wall). A real coding task — file edits + a test run —
+# can run many minutes; this is only the backstop, not the normal stop signal.
+# The idle timer below is what actually ends a *stalled* run. Override with
+# $AGY_BRIDGE_TIMEOUT.
+DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "900"))
+
+# Idle (inactivity) timeout: kill only after agy has emitted NOTHING for this
+# many seconds. Reset on every chunk read, so a task that keeps streaming output
+# stays alive regardless of total elapsed time, while a truly hung agy dies fast.
+# This is the in-process "is it still printing?" check — the caller need not
+# poll. Override with $AGY_BRIDGE_IDLE_TIMEOUT.
+DEFAULT_IDLE_TIMEOUT = float(os.environ.get("AGY_BRIDGE_IDLE_TIMEOUT", "120"))
 
 # --- ANSI / TUI noise stripping -------------------------------------------
 
@@ -121,10 +132,25 @@ class AgyNotFoundError(RuntimeError):
     pass
 
 
+class AgyTimeoutError(TimeoutError):
+    """Raised when agy is killed by the idle or hard timeout.
+
+    Carries whatever cleaned stdout agy emitted before the kill, so the caller
+    can surface partial work instead of dropping it. A parent can read `.partial`
+    and decide to resume the session with `agy -c`.
+    """
+
+    def __init__(self, message: str, partial: str = "") -> None:
+        super().__init__(message)
+        self.partial = partial
+
+
 # --- platform pty runners --------------------------------------------------
 
 
-def _run_windows(argv: list[str], timeout: float) -> str:
+def _run_windows(
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+) -> str:
     try:
         from winpty import PtyProcess  # type: ignore
     except ImportError as exc:  # pragma: no cover - env-specific
@@ -133,8 +159,15 @@ def _run_windows(argv: list[str], timeout: float) -> str:
         ) from exc
 
     # Wide cols so agy does not hard-wrap; tall rows to avoid paging.
+    # NB: ConPTY batches output and may not surface a partial (un-terminated)
+    # line until the child exits, so `.partial` on a Windows timeout is
+    # best-effort — it holds whatever ConPTY had already flushed, often empty.
     proc = PtyProcess.spawn(argv, dimensions=(50, 200))
     chunks: list[str] = []
+    # A 1-slot mutable timestamp the reader bumps on every chunk; the main loop
+    # polls it to detect a stall without blocking on the read itself.
+    last_activity = [time.monotonic()]
+    done = threading.Event()
 
     def _reader() -> None:
         try:
@@ -142,27 +175,47 @@ def _run_windows(argv: list[str], timeout: float) -> str:
                 data = proc.read(4096)
                 if data:
                     chunks.append(data)
+                    last_activity[0] = time.monotonic()
                 elif not proc.isalive():
                     break
         except EOFError:
             pass
+        finally:
+            done.set()
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
-    t.join(timeout)
-    if t.is_alive():
-        try:
-            proc.terminate(force=True)
-        except Exception:
-            pass
-        t.join(5)
-        raise TimeoutError(f"process timed out after {timeout}s")
+
+    start = time.monotonic()
+    while not done.wait(1.0):  # poll in ~1s slices
+        now = time.monotonic()
+        if now - last_activity[0] > idle_timeout:
+            _terminate_windows(proc, t)
+            raise AgyTimeoutError(
+                f"agy idle (no output) for {idle_timeout:.0f}s", clean("".join(chunks))
+            )
+        if now - start > timeout:
+            _terminate_windows(proc, t)
+            raise AgyTimeoutError(
+                f"agy exceeded hard timeout {timeout:.0f}s", clean("".join(chunks))
+            )
 
     return clean("".join(chunks))
 
 
-def _run_posix(argv: list[str], timeout: float) -> str:
+def _terminate_windows(proc, t: threading.Thread) -> None:
+    try:
+        proc.terminate(force=True)
+    except Exception:
+        pass
+    t.join(5)
+
+
+def _run_posix(
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+) -> str:
     import pty
+    import select
     import subprocess
 
     master_fd, slave_fd = pty.openpty()
@@ -181,12 +234,27 @@ def _run_posix(argv: list[str], timeout: float) -> str:
         os.close(slave_fd)  # parent keeps only the master end
 
     chunks: list[bytes] = []
-    deadline = time.monotonic() + timeout
+    timed_out: AgyTimeoutError | None = None
+    start = last = time.monotonic()
     try:
         while True:
-            if time.monotonic() > deadline:
+            now = time.monotonic()
+            if now - last > idle_timeout:
                 proc.kill()
-                raise TimeoutError(f"process timed out after {timeout}s")
+                timed_out = AgyTimeoutError(
+                    f"agy idle (no output) for {idle_timeout:.0f}s", ""
+                )
+                break
+            if now - start > timeout:
+                proc.kill()
+                timed_out = AgyTimeoutError(
+                    f"agy exceeded hard timeout {timeout:.0f}s", ""
+                )
+                break
+            # Poll so a stalled child can't block us forever on os.read.
+            r, _, _ = select.select([master_fd], [], [], 1.0)
+            if not r:
+                continue
             try:
                 data = os.read(master_fd, 4096)
             except OSError:
@@ -194,6 +262,7 @@ def _run_posix(argv: list[str], timeout: float) -> str:
             if not data:
                 break
             chunks.append(data)
+            last = time.monotonic()  # progress resets the idle timer
     finally:
         try:
             os.close(master_fd)
@@ -204,31 +273,102 @@ def _run_posix(argv: list[str], timeout: float) -> str:
         except Exception:
             proc.kill()
 
-    raw = b"".join(chunks).decode("utf-8", errors="replace")
-    return clean(raw)
+    cleaned = clean(b"".join(chunks).decode("utf-8", errors="replace"))
+    if timed_out is not None:
+        timed_out.partial = cleaned  # carry whatever agy produced before the kill
+        raise timed_out
+    return cleaned
 
 
 # --- public API ------------------------------------------------------------
 
 
-def _pty_run(argv: list[str], timeout: float) -> str:
+def _pty_run(
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+) -> str:
     """Spawn argv attached to a fresh pty; return its cleaned stdout.
 
     Platform-agnostic seam: `run()` calls this with the agy command, and the
     test suite calls it with a stub command to exercise the real pty machinery
     without needing `agy` installed.
+
+    Raises AgyTimeoutError (carrying partial output) on idle or hard timeout.
     """
     if sys.platform == "win32":
-        return _run_windows(argv, timeout)
-    return _run_posix(argv, timeout)
+        return _run_windows(argv, timeout, idle_timeout)
+    return _run_posix(argv, timeout, idle_timeout)
 
 
-def run(prompt: str, timeout: float = DEFAULT_TIMEOUT, agy_path: str | None = None) -> str:
+def resolve_add_dirs(
+    explicit: list[str] | None, *, use_cwd_default: bool
+) -> list[str]:
+    """Decide which directories agy should see, intent-aware.
+
+    - Caller passed explicit dirs -> honour them verbatim (caller knows best).
+    - Otherwise, coding-shaped calls (`use_cwd_default=True`) default to the
+      current working dir so agy can actually see the repo — without this,
+      `agy -p` runs blind in its scratch workspace and silently does nothing.
+    - Research / Q&A calls (`use_cwd_default=False`) get NO workspace: feeding
+      the repo there only wastes agy's context and can mislead it.
+    """
+    if explicit:
+        return list(explicit)
+    if use_cwd_default:
+        return [os.getcwd()]
+    return []
+
+
+def build_argv(
+    path: str,
+    prompt: str,
+    *,
+    add_dirs: list[str] | None = None,
+    model: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    extra_args: list[str] | None = None,
+) -> list[str]:
+    """Assemble the agy argv. Split out so it is testable without spawning.
+
+    `add_dirs` is the critical one: without `--add-dir`, `agy -p` runs in its
+    own scratch workspace and never sees the caller's repo, so any delegated
+    coding task silently does nothing. Pass the repo root to fix that.
+    """
+    argv = [path]
+    for d in add_dirs or []:
+        argv += ["--add-dir", d]
+    if model:
+        argv += ["--model", model]
+    # Tell agy to give up ~15s before our pty hard-kills it, so it can emit a
+    # clean message instead of being severed mid-write.
+    inner = max(30, int(timeout) - 15)
+    argv += ["--print-timeout", f"{inner}s"]
+    argv += list(extra_args or [])
+    argv += ["-p", prompt]
+    return argv
+
+
+def run(
+    prompt: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    agy_path: str | None = None,
+    *,
+    add_dirs: list[str] | None = None,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+) -> str:
     """
     Run `agy -p <prompt>` through a fresh pty and return its cleaned stdout.
 
-    Raises AgyNotFoundError if `agy` can't be located, TimeoutError on timeout.
-    Returns "" if agy genuinely emitted nothing.
+    `add_dirs` are passed as `--add-dir` so agy operates on the caller's repo
+    (essential for coding delegation). `model` maps to `--model`.
+
+    `timeout` is the hard wall (absolute ceiling); `idle_timeout` ends a run that
+    has gone silent. A long-but-active task survives the wall; a stalled one dies
+    at the idle bound.
+
+    Raises AgyNotFoundError if `agy` can't be located, AgyTimeoutError (with
+    `.partial`) on timeout. Returns "" if agy genuinely emitted nothing.
     """
     if not prompt or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
@@ -240,21 +380,64 @@ def run(prompt: str, timeout: float = DEFAULT_TIMEOUT, agy_path: str | None = No
             "https://antigravity.google/cli"
         )
 
-    return _pty_run([path, "-p", prompt], timeout)
+    argv = build_argv(
+        path, prompt, add_dirs=add_dirs, model=model,
+        timeout=timeout, extra_args=extra_args,
+    )
+    return _pty_run(argv, timeout, idle_timeout)
 
 
 def main(argv: list[str] | None = None) -> int:
+    import argparse
+
     argv = argv if argv is not None else sys.argv[1:]
-    if not argv:
-        sys.stderr.write('Usage: python -m agy_headless_bridge "your prompt"\n')
-        return 64
-    prompt = " ".join(argv)
+    parser = argparse.ArgumentParser(
+        prog="agy-bridge",
+        description="Call the Antigravity CLI (agy) headlessly via a pty.",
+    )
+    parser.add_argument("prompt", nargs="+", help="prompt to send to agy")
+    parser.add_argument(
+        "--add-dir", action="append", default=[], metavar="DIR",
+        help="add a directory to agy's workspace (repeatable). Pass your repo "
+             "root here for coding tasks, else agy can't see your files.",
+    )
+    parser.add_argument("--model", default=None, help="agy --model to use")
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT,
+        help=f"hard timeout (absolute ceiling) in seconds "
+             f"(default {int(DEFAULT_TIMEOUT)})",
+    )
+    parser.add_argument(
+        "--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT,
+        help=f"kill agy after this many seconds of no output "
+             f"(default {int(DEFAULT_IDLE_TIMEOUT)})",
+    )
+    parser.add_argument(
+        "--no-workspace", action="store_true",
+        help="do not auto-add the current directory to agy's workspace "
+             "(use for research / Q&A that needs no repo context)",
+    )
+    args = parser.parse_args(argv)
+    prompt = " ".join(args.prompt)
+    # Coding-shaped by default: inject cwd unless explicitly opted out or the
+    # caller already named dirs. resolve_add_dirs keeps the policy in one place.
+    add_dirs = resolve_add_dirs(args.add_dir, use_cwd_default=not args.no_workspace)
     try:
-        output = run(prompt)
+        output = run(
+            prompt, timeout=args.timeout, idle_timeout=args.idle_timeout,
+            add_dirs=add_dirs, model=args.model,
+        )
     except AgyNotFoundError as exc:
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 127
-    except TimeoutError as exc:
+    except AgyTimeoutError as exc:
+        if exc.partial:
+            print(exc.partial)  # surface partial work instead of dropping it
+        sys.stderr.write(
+            f"[agy-bridge] {exc}; partial output above; resume with 'agy -c'\n"
+        )
+        return 1
+    except TimeoutError as exc:  # pragma: no cover - defensive
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 1
     if not output:

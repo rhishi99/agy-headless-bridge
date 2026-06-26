@@ -168,24 +168,55 @@ OS default install paths.
 ### Library
 
 ```python
-from agy_headless_bridge import run, AgyNotFoundError
+from agy_headless_bridge import run, AgyNotFoundError, AgyTimeoutError
 
 try:
-    print(run("reply with exactly: OK", timeout=60))
+    # For a CODING task, pass the repo so agy can see it — the library `run()`
+    # is a thin primitive and does NOT auto-add a workspace (the CLI/MCP layers
+    # do). Without add_dirs, agy -p runs blind in its own scratch workspace.
+    print(run("Summarize this repo", add_dirs=["."], timeout=600))
+except AgyTimeoutError as exc:
+    print("timed out; partial so far:\n", exc.partial)  # resume with `agy -c`
 except AgyNotFoundError:
     print("install agy first")
 ```
 
-`run(prompt, timeout=180, agy_path=None) -> str` — raises `AgyNotFoundError` if
-the binary is missing, `TimeoutError` on timeout, `ValueError` on empty prompt.
-Returns `""` only if agy genuinely emitted nothing.
+`run(prompt, timeout=900, agy_path=None, *, add_dirs=None, model=None,
+idle_timeout=120, extra_args=None) -> str` — raises `AgyNotFoundError` if the
+binary is missing, `AgyTimeoutError` (carrying `.partial`) on the idle or hard
+timeout, `ValueError` on empty prompt. Returns `""` only if agy genuinely
+emitted nothing. `add_dirs` → agy `--add-dir`; `model` → `--model`. The
+`timeout` is the absolute ceiling; `idle_timeout` ends a run that has gone
+silent for that many seconds (so a long-but-active task survives the ceiling).
+
+To get the CLI/MCP "default to cwd for coding, none for research" behaviour in
+your own code, use `resolve_add_dirs(explicit, use_cwd_default=...)`.
 
 ### CLI
 
 ```bash
 agy-bridge "reply with exactly: OK"
 python -m agy_headless_bridge "reply with exactly: OK"   # equivalent
+
+# Coding task: the current directory is auto-added to agy's workspace, so agy
+# sees your repo with no extra flags.
+agy-bridge "Find and fix the off-by-one in the parser"
+
+# Research / Q&A that needs no repo — opt out of the cwd default:
+agy-bridge --no-workspace "Explain idle timeouts in process supervision"
+
+# Add more dirs, pick a model, widen the limits for a big task:
+agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
+    --timeout 1800 --idle-timeout 180 "Refactor X to match the shared lib"
 ```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--add-dir DIR` | cwd (auto) | Add a dir to agy's workspace (repeatable). |
+| `--no-workspace` | off | Don't auto-add cwd (use for research / Q&A). |
+| `--model NAME` | agy default | agy `--model`. |
+| `--timeout SECS` | `900` | Hard ceiling (absolute wall). |
+| `--idle-timeout SECS` | `120` | Kill after this many seconds of no output. |
 
 ### MCP server
 
@@ -207,7 +238,11 @@ every call through the pty bridge.
 | Tool | Argument | Type | Required | Description |
 |---|---|---|---|---|
 | `agy_ask` | `prompt` | string | ✅ | one-shot prompt sent to agy |
-| `agy_research` | `query` | string | ✅ | wrapped as a deep-research prompt for agy |
+| `agy_ask` | `workspace` | `"auto"`\|`"none"` | | `auto` (default) adds the server's cwd so agy sees the repo; `none` for research / Q&A |
+| `agy_ask` | `add_dir` | string[] | | explicit dirs for agy's workspace (overrides the `workspace` default) |
+| `agy_ask` | `model` | string | | agy `--model` |
+| `agy_ask` | `timeout` | number | | hard timeout override, seconds |
+| `agy_research` | `query` | string | ✅ | wrapped as a deep-research prompt for agy (never attaches a workspace) |
 
 **Response shape** — a standard MCP `tools/call` result; the answer is the text
 content:
@@ -220,7 +255,9 @@ content:
 }
 ```
 
-On failure the `text` is an `[agy-mcp] ERROR: ...` string (agy missing, timeout,
+On a timeout the `text` is whatever agy produced before the kill followed by an
+`[agy-mcp] TIMEOUT: ...; resume with 'agy -c'` note, so partial work isn't lost.
+On other failures the `text` is an `[agy-mcp] ERROR: ...` string (agy missing,
 etc.) rather than a JSON-RPC error, so the agent always gets a readable reply.
 
 ---
@@ -291,7 +328,8 @@ echo "$ANSWER"
 | Env var | Default | Meaning |
 |---|---|---|
 | `AGY_PATH` | auto-detect | Absolute path to the `agy` binary |
-| `AGY_BRIDGE_TIMEOUT` | `180` | Seconds before a call is killed |
+| `AGY_BRIDGE_TIMEOUT` | `900` | Hard ceiling (absolute wall), in seconds |
+| `AGY_BRIDGE_IDLE_TIMEOUT` | `120` | Kill after this many seconds of no output from agy |
 
 ---
 
@@ -343,9 +381,14 @@ terminal first: `agy -p "say hi"`. If that's also empty, the problem is agy/auth
 not the bridge. Re-authenticate (`agy` interactively) or check
 `ANTIGRAVITY_API_KEY`.
 
-**`TimeoutError`** — the call exceeded `AGY_BRIDGE_TIMEOUT` (default 180s). Raise
-it for long prompts: `AGY_BRIDGE_TIMEOUT=600 agy-bridge "..."` or
-`run(prompt, timeout=600)`.
+**`AgyTimeoutError`** — agy hit a limit. Two triggers: the **hard ceiling**
+(`AGY_BRIDGE_TIMEOUT`, default 900s) and the **idle timeout**
+(`AGY_BRIDGE_IDLE_TIMEOUT`, default 120s — fires when agy emits nothing for that
+long). The error carries `.partial` (whatever agy produced first), and the CLI
+prints it before exiting. Widen the limits for long prompts:
+`AGY_BRIDGE_TIMEOUT=1800 agy-bridge "..."`, `--idle-timeout 300`, or
+`run(prompt, timeout=1800, idle_timeout=300)`. To continue a run that timed out,
+resume the agy session directly with `agy -c`.
 
 **Pseudo-terminal allocation fails** — rare. On Windows it means `pywinpty`
 isn't importable (reinstall it). On POSIX it means the system is out of pty

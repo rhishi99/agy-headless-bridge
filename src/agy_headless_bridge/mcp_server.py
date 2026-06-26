@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import sys
 
-from .bridge import AgyNotFoundError, run
+from .bridge import AgyNotFoundError, AgyTimeoutError, resolve_add_dirs, run
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -51,7 +51,27 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to agy"}
+                "prompt": {"type": "string", "description": "The prompt to send to agy"},
+                "add_dir": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Explicit directories to add to agy's workspace. "
+                                   "Overrides the workspace default below.",
+                },
+                "workspace": {
+                    "type": "string",
+                    "enum": ["auto", "none"],
+                    "description": "auto (default): if no add_dir given, add the "
+                                   "server's cwd so agy sees the repo — needed for "
+                                   "coding tasks. none: no workspace (use for "
+                                   "research / Q&A that needs no repo context).",
+                },
+                "model": {"type": "string", "description": "agy --model (optional)"},
+                "timeout": {
+                    "type": "number",
+                    "description": "Hard timeout in seconds (override when a task "
+                                   "legitimately needs longer).",
+                },
             },
             "required": ["prompt"],
         },
@@ -75,12 +95,25 @@ def _send(obj: dict) -> None:
     sys.stdout.flush()
 
 
-def _call_agy(prompt: str) -> str:
+def _call_agy(
+    prompt: str,
+    add_dirs: list | None = None,
+    model: str | None = None,
+    timeout: float | None = None,
+) -> str:
+    kwargs: dict = {"add_dirs": add_dirs, "model": model}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     try:
-        out = run(prompt)
+        out = run(prompt, **kwargs)
     except AgyNotFoundError as exc:
         return f"[agy-mcp] ERROR: {exc}"
-    except TimeoutError as exc:
+    except AgyTimeoutError as exc:
+        # Surface partial work so the caller isn't left empty-handed; it can
+        # resume the agy session with `agy -c`.
+        note = f"[agy-mcp] TIMEOUT: {exc}; resume with 'agy -c'"
+        return f"{exc.partial}\n\n{note}" if exc.partial else note
+    except TimeoutError as exc:  # pragma: no cover - defensive
         return f"[agy-mcp] ERROR: {exc}"
     except Exception as exc:  # pragma: no cover - defensive
         return f"[agy-mcp] ERROR: {exc}"
@@ -101,7 +134,7 @@ def handle_request(req: dict) -> dict | None:
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "agy-headless-bridge", "version": "1.0.1"},
+                "serverInfo": {"name": "agy-headless-bridge", "version": "1.2.0"},
             },
         }
 
@@ -112,8 +145,20 @@ def handle_request(req: dict) -> dict | None:
         name = params.get("name", "")
         args = params.get("arguments", {}) or {}
         if name == "agy_ask":
-            result = _call_agy(args.get("prompt", ""))
+            # Coding-shaped by default: inject cwd unless caller opts out
+            # (workspace="none") or names dirs explicitly.
+            add_dirs = resolve_add_dirs(
+                args.get("add_dir"),
+                use_cwd_default=args.get("workspace", "auto") != "none",
+            )
+            result = _call_agy(
+                args.get("prompt", ""),
+                add_dirs=add_dirs,
+                model=args.get("model"),
+                timeout=args.get("timeout"),
+            )
         elif name == "agy_research":
+            # Research never needs the repo — no workspace, keeps agy's context lean.
             result = _call_agy(f"Do deep research on: {args.get('query', '')}")
         else:
             return {
