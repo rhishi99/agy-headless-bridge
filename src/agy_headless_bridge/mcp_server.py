@@ -51,7 +51,15 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to agy"}
+                "prompt": {"type": "string", "description": "The prompt to send to agy"},
+                "add_dir": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Directories to add to agy's workspace. Pass the "
+                                   "repo root for coding tasks — without it agy can't "
+                                   "see your files.",
+                },
+                "model": {"type": "string", "description": "agy --model (optional)"},
             },
             "required": ["prompt"],
         },
@@ -75,9 +83,9 @@ def _send(obj: dict) -> None:
     sys.stdout.flush()
 
 
-def _call_agy(prompt: str) -> str:
+def _call_agy(prompt: str, add_dirs: list | None = None, model: str | None = None) -> str:
     try:
-        out = run(prompt)
+        out = run(prompt, add_dirs=add_dirs, model=model)
     except AgyNotFoundError as exc:
         return f"[agy-mcp] ERROR: {exc}"
     except TimeoutError as exc:
@@ -101,7 +109,7 @@ def handle_request(req: dict) -> dict | None:
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "agy-headless-bridge", "version": "1.0.1"},
+                "serverInfo": {"name": "agy-headless-bridge", "version": "1.1.0"},
             },
         }
 
@@ -112,7 +120,11 @@ def handle_request(req: dict) -> dict | None:
         name = params.get("name", "")
         args = params.get("arguments", {}) or {}
         if name == "agy_ask":
-            result = _call_agy(args.get("prompt", ""))
+            result = _call_agy(
+                args.get("prompt", ""),
+                add_dirs=args.get("add_dir"),
+                model=args.get("model"),
+            )
         elif name == "agy_research":
             result = _call_agy(f"Do deep research on: {args.get('query', '')}")
         else:

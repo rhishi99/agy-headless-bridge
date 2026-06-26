@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-26
+
+### Added
+- `run()` now accepts `add_dirs`, `model`, and `extra_args`. `add_dirs` maps to
+  agy's `--add-dir` so agy operates on the **caller's repo** — without it,
+  `agy -p` runs blind in its own scratch workspace and any delegated coding task
+  silently does nothing. New `build_argv()` helper (testable without spawning).
+- CLI gains `--add-dir` (repeatable), `--model`, and `--timeout`.
+- MCP `agy_ask` tool gains optional `add_dir` (array) and `model` arguments.
+
+### Changed
+- Default timeout 180s → **300s** to match agy's own `--print-timeout` (5m); a
+  real edit-plus-test task needs minutes. The bridge also passes agy an inner
+  `--print-timeout` ~15s under the pty hard-kill so agy emits a clean message
+  instead of being severed mid-write. Override via `$AGY_BRIDGE_TIMEOUT`.
+
+### Fixed
+- Delegated coding tasks failed because the bridge never forwarded a workspace
+  dir to agy. Now fixed via `--add-dir`.
+
 ## [1.0.1] — 2026-06-13
 
 ### Added
@@ -46,6 +66,7 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.1.0
 [1.0.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.1
 [1.0.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.0

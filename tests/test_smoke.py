@@ -58,6 +58,33 @@ def test_run_raises_when_agy_missing(monkeypatch):
         bridge.run("hello")
 
 
+# --- argv construction (the workspace-blindness bug had no coverage) ------
+
+def test_build_argv_passes_add_dir_and_model():
+    argv = bridge.build_argv(
+        "agy", "do the thing",
+        add_dirs=["/repo/a", "/repo/b"], model="pro", timeout=300,
+    )
+    # repo dirs must reach agy, else it runs blind in its scratch workspace
+    assert argv.count("--add-dir") == 2
+    assert "/repo/a" in argv and "/repo/b" in argv
+    assert argv[argv.index("--model") + 1] == "pro"
+    # inner print-timeout fires before our pty hard-kill
+    assert "--print-timeout" in argv
+    assert argv[argv.index("--print-timeout") + 1] == "285s"
+    # prompt is last, behind -p
+    assert argv[-2:] == ["-p", "do the thing"]
+
+
+def test_run_forwards_add_dirs_to_pty(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
+    monkeypatch.setattr(bridge, "_pty_run", lambda argv, t: captured.setdefault("argv", argv) or "ok")
+    bridge.run("hello", add_dirs=["/my/repo"])
+    assert "--add-dir" in captured["argv"]
+    assert "/my/repo" in captured["argv"]
+
+
 # --- pty mechanics (no agy needed; runs on every CI runner) ---------------
 
 # A stand-in for `agy`: it prints its payload ONLY when stdout is a real tty —

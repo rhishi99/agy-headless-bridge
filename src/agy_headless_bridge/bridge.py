@@ -40,7 +40,10 @@ import sys
 import threading
 import time
 
-DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "180"))
+# Default matches agy's own `--print-timeout` (5m). A real coding task — file
+# edits + a test run — easily needs minutes; the old 180s killed the pty before
+# agy finished. Override with $AGY_BRIDGE_TIMEOUT.
+DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "300"))
 
 # --- ANSI / TUI noise stripping -------------------------------------------
 
@@ -223,9 +226,49 @@ def _pty_run(argv: list[str], timeout: float) -> str:
     return _run_posix(argv, timeout)
 
 
-def run(prompt: str, timeout: float = DEFAULT_TIMEOUT, agy_path: str | None = None) -> str:
+def build_argv(
+    path: str,
+    prompt: str,
+    *,
+    add_dirs: list[str] | None = None,
+    model: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    extra_args: list[str] | None = None,
+) -> list[str]:
+    """Assemble the agy argv. Split out so it is testable without spawning.
+
+    `add_dirs` is the critical one: without `--add-dir`, `agy -p` runs in its
+    own scratch workspace and never sees the caller's repo, so any delegated
+    coding task silently does nothing. Pass the repo root to fix that.
+    """
+    argv = [path]
+    for d in add_dirs or []:
+        argv += ["--add-dir", d]
+    if model:
+        argv += ["--model", model]
+    # Tell agy to give up ~15s before our pty hard-kills it, so it can emit a
+    # clean message instead of being severed mid-write.
+    inner = max(30, int(timeout) - 15)
+    argv += ["--print-timeout", f"{inner}s"]
+    argv += list(extra_args or [])
+    argv += ["-p", prompt]
+    return argv
+
+
+def run(
+    prompt: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    agy_path: str | None = None,
+    *,
+    add_dirs: list[str] | None = None,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+) -> str:
     """
     Run `agy -p <prompt>` through a fresh pty and return its cleaned stdout.
+
+    `add_dirs` are passed as `--add-dir` so agy operates on the caller's repo
+    (essential for coding delegation). `model` maps to `--model`.
 
     Raises AgyNotFoundError if `agy` can't be located, TimeoutError on timeout.
     Returns "" if agy genuinely emitted nothing.
@@ -240,17 +283,39 @@ def run(prompt: str, timeout: float = DEFAULT_TIMEOUT, agy_path: str | None = No
             "https://antigravity.google/cli"
         )
 
-    return _pty_run([path, "-p", prompt], timeout)
+    argv = build_argv(
+        path, prompt, add_dirs=add_dirs, model=model,
+        timeout=timeout, extra_args=extra_args,
+    )
+    return _pty_run(argv, timeout)
 
 
 def main(argv: list[str] | None = None) -> int:
+    import argparse
+
     argv = argv if argv is not None else sys.argv[1:]
-    if not argv:
-        sys.stderr.write('Usage: python -m agy_headless_bridge "your prompt"\n')
-        return 64
-    prompt = " ".join(argv)
+    parser = argparse.ArgumentParser(
+        prog="agy-bridge",
+        description="Call the Antigravity CLI (agy) headlessly via a pty.",
+    )
+    parser.add_argument("prompt", nargs="+", help="prompt to send to agy")
+    parser.add_argument(
+        "--add-dir", action="append", default=[], metavar="DIR",
+        help="add a directory to agy's workspace (repeatable). Pass your repo "
+             "root here for coding tasks, else agy can't see your files.",
+    )
+    parser.add_argument("--model", default=None, help="agy --model to use")
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT,
+        help=f"hard timeout in seconds (default {int(DEFAULT_TIMEOUT)})",
+    )
+    args = parser.parse_args(argv)
+    prompt = " ".join(args.prompt)
     try:
-        output = run(prompt)
+        output = run(
+            prompt, timeout=args.timeout,
+            add_dirs=args.add_dir, model=args.model,
+        )
     except AgyNotFoundError as exc:
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 127
