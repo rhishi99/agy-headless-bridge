@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-26
+
+### Added
+- **Intent-aware workspace.** New `resolve_add_dirs()` helper. `agy_ask` (MCP)
+  and the CLI now default to adding the current directory so agy sees the repo
+  without the caller having to remember `--add-dir` — but **research/Q&A calls
+  do not**, since a repo only pollutes their context. Opt out of the default
+  with CLI `--no-workspace` or MCP `workspace: "none"`; explicit `--add-dir`
+  always wins. `agy_research` never attaches a workspace.
+- **Idle timeout.** New `AGY_BRIDGE_IDLE_TIMEOUT` (default 120s) and CLI
+  `--idle-timeout`. The bridge kills agy only after it has emitted nothing for
+  the idle window — a task that keeps streaming output stays alive regardless of
+  total elapsed time, while a genuinely hung agy dies fast. This is the
+  in-process "is it still printing?" check, so the caller never has to poll.
+- **Partial output on timeout.** New `AgyTimeoutError(partial=...)`. On idle or
+  hard timeout the bridge now returns whatever agy produced before the kill
+  instead of discarding it; CLI prints it and MCP appends it, both noting the
+  session can be resumed with `agy -c`.
+- MCP `agy_ask` gains `workspace` (`auto`/`none`) and `timeout` arguments — the
+  MCP layer previously had no way to override the timeout at all.
+
+### Changed
+- Hard timeout is now an absolute **ceiling** (default 300s → **900s**), not the
+  normal stop signal; the idle timer ends stalled runs. Both `_run_posix` and
+  `_run_windows` poll in ~1s slices to enforce idle + hard bounds.
+
 ## [1.1.0] — 2026-06-26
 
 ### Added
@@ -66,7 +92,8 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.0
 [1.1.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.1.0
 [1.0.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.1
 [1.0.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.0.0
