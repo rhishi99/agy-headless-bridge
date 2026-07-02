@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import sys
 
+from . import __version__
 from .bridge import AgyNotFoundError, AgyTimeoutError, resolve_add_dirs, run
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -128,15 +129,22 @@ def handle_request(req: dict) -> dict | None:
     params = req.get("params", {}) or {}
 
     if method == "initialize":
+        # Echo the client's requested version if we speak it too; otherwise
+        # fall back to ours so the client can decide whether to proceed.
+        requested = params.get("protocolVersion")
+        negotiated = requested if requested == PROTOCOL_VERSION else PROTOCOL_VERSION
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": negotiated,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "agy-headless-bridge", "version": "1.2.0"},
+                "serverInfo": {"name": "agy-headless-bridge", "version": __version__},
             },
         }
+
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS}}

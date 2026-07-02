@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `clean()` no longer mangles returned code: it used to `.strip()` every line
+  and drop blank ones, destroying indentation and blank lines in any code agy
+  returned. It now only trims lines that actually carried box-drawing/spinner
+  glyphs; plain lines (including indentation and blank lines) pass through
+  untouched aside from trailing whitespace.
+- Windows: a child that exits with zero output could hang until the idle
+  timeout fired a spurious `AgyTimeoutError`, because `pywinpty`'s reader
+  thread doesn't reliably unblock on a silent exit. The poll loop now also
+  breaks as soon as `proc.isalive()` is false.
+- `build_argv()`'s inner `--print-timeout` had a hard floor of 30s that could
+  meet or exceed a small custom `timeout`, defeating the margin meant to keep
+  agy from being severed mid-write. It's now always kept strictly below the
+  outer timeout.
+- `from agy_headless_bridge import run, AgyNotFoundError, AgyTimeoutError`
+  (as shown in the README) raised `ImportError` — `AgyTimeoutError` and
+  `resolve_add_dirs` were never exported from `__init__.py`. Both are now
+  exported.
+- Version was hardcoded in four places (three of them stale). `__version__`
+  is now read from installed package metadata (single source: `pyproject.toml`),
+  and the MCP `initialize` response reports it instead of a hardcoded string.
+  `server.json` bumped to match.
+
+### Added
+- MCP server now answers `ping` with an empty result instead of a
+  `-32601 Method not found` error, and echoes back the client's requested
+  `protocolVersion` in `initialize` when it matches ours.
+
 ## [1.2.0] — 2026-06-26
 
 ### Added
