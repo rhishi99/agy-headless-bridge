@@ -109,11 +109,11 @@ flowchart TD
 | Platform | pty backend | Status |
 |---|---|---|
 | **Windows** | ConPTY via [`pywinpty`] (`PtyProcess`) | ✅ verified (agy 1.0.6) |
-| **Linux / macOS** | stdlib [`pty`] (`os.openpty` + `subprocess.Popen`) | ✅ verified on macOS hardware |
+| **Linux / macOS** | stdlib [`pty`] (`os.openpty` + `subprocess.Popen`) | ⚠️ pty mechanics verified on Linux CI; real `agy` round-trip **not yet verified on POSIX hardware** |
 
 > [!TIP]
-> **Linux users wanted.** The pty mechanics are verified on Linux CI and macOS hardware, but the real `agy` round-trip on bare-metal Linux hasn't been run.
-> If you're on Linux: `pip install agy-headless-bridge`, try it, and
+> **Linux/macOS users wanted.** The pty mechanics (the `os.openpty` + `Popen` plumbing) are verified on Linux CI via a stub, but nobody has confirmed the real `agy` round-trip on bare-metal Linux or macOS yet.
+> If you're on POSIX: `pip install agy-headless-bridge`, try it, and
 > [tell us how it went](https://github.com/rhishi99/agy-headless-bridge/issues/new/choose) — pass or fail. PRs welcome.
 
 > **Why not just the existing `agy` Claude Code plugins?** They wrap `agy` for
@@ -221,6 +221,18 @@ agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
 ### MCP server
 
 ```bash
+claude mcp add --transport stdio antigravity -- agy-mcp-server
+```
+
+`agy-mcp-server` is the console-script entry point `pip install` puts on your
+`PATH` — it's bound to the exact interpreter you installed the package with,
+so it sidesteps the "wrong `python`" problem below entirely. Prefer it over
+`python -m agy_headless_bridge.mcp_server`, especially on Windows.
+
+<details>
+<summary>Alternative: invoke via <code>python -m</code></summary>
+
+```bash
 claude mcp add --transport stdio antigravity -- \
     python -m agy_headless_bridge.mcp_server
 ```
@@ -229,6 +241,8 @@ claude mcp add --transport stdio antigravity -- \
 > command above. Bare `python` can resolve to the wrong interpreter or the
 > Windows Store stub, which surfaces as an `-32000` MCP connection error. See
 > [Troubleshooting](#troubleshooting--faq).
+
+</details>
 
 The server speaks JSON-RPC stdio directly (no MCP SDK dependency) and routes
 every call through the pty bridge.
@@ -280,12 +294,8 @@ Antigravity**, headlessly. Common setups:
 Register the MCP server, then prompt Claude to use it:
 
 ```bash
-claude mcp add --transport stdio antigravity -- \
-    python -m agy_headless_bridge.mcp_server
+claude mcp add --transport stdio antigravity -- agy-mcp-server
 ```
-
-> **Windows:** swap `python` for `py -3.11` here too — see the note above and
-> [Troubleshooting](#troubleshooting--faq).
 
 > **Prompt to Claude Code:**
 > *"Use the `agy_ask` tool to ask Antigravity to review this function for edge
@@ -389,6 +399,15 @@ prints it before exiting. Widen the limits for long prompts:
 `AGY_BRIDGE_TIMEOUT=1800 agy-bridge "..."`, `--idle-timeout 300`, or
 `run(prompt, timeout=1800, idle_timeout=300)`. To continue a run that timed out,
 resume the agy session directly with `agy -c`.
+
+**agy stalls until the idle timeout, then times out on what looks like a
+normal prompt** — this bridge never writes to agy's stdin, so if agy pauses
+mid-run to ask for interactive approval (e.g. "allow this tool call?"), the
+prompt sits unanswered and the run silently stalls until the idle timeout
+kills it. This is currently the most common way a run hangs. Configure `agy`
+itself to auto-approve (check `agy --help` / its settings for a
+non-interactive/auto-approve flag) before delegating tasks that involve tool
+use, or expect the idle timeout to eventually fire and surface `.partial`.
 
 **Pseudo-terminal allocation fails** — rare. On Windows it means `pywinpty`
 isn't importable (reinstall it). On POSIX it means the system is out of pty

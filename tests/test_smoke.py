@@ -37,6 +37,13 @@ def test_clean_empty_returns_empty():
     assert bridge.clean("\x1b[0m\n  \n") == ""
 
 
+def test_clean_preserves_code_indentation_and_blank_lines():
+    # Bug: clean() used to .strip() every line and drop blank ones, mangling
+    # any returned Python (or other indentation-sensitive) code.
+    raw = "def f():\n    if x:\n        y()\n\n    return x\n"
+    assert bridge.clean(raw) == raw.strip("\n")
+
+
 # --- pure-unit: arg validation --------------------------------------------
 
 def test_run_rejects_empty_prompt():
@@ -74,6 +81,16 @@ def test_build_argv_passes_add_dir_and_model():
     assert argv[argv.index("--print-timeout") + 1] == "285s"
     # prompt is last, behind -p
     assert argv[-2:] == ["-p", "do the thing"]
+
+
+@pytest.mark.parametrize("timeout", [900, 300, 30, 20, 5])
+def test_build_argv_inner_timeout_always_below_outer(timeout):
+    # Bug: a hard floor of 30 on the inner print-timeout could meet or exceed
+    # a small custom `timeout`, defeating the "agy gives up before our
+    # hard-kill" margin and severing output mid-write.
+    argv = bridge.build_argv("agy", "x", timeout=timeout)
+    inner = int(argv[argv.index("--print-timeout") + 1].rstrip("s"))
+    assert inner < timeout
 
 
 def test_run_forwards_add_dirs_to_pty(monkeypatch):
@@ -279,6 +296,20 @@ def test_mcp_agy_research_gets_no_workspace(monkeypatch):
     })
     # research must never attach the repo
     assert captured["add_dirs"] is None or captured["add_dirs"] == []
+
+
+def test_mcp_ping_returns_result_not_error():
+    # Real MCP clients ping periodically; a -32601 "method not found" error
+    # can make a client treat the server as broken and disconnect.
+    resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "ping"})
+    assert resp == {"jsonrpc": "2.0", "id": 9, "result": {}}
+
+
+def test_mcp_initialize_reports_installed_version():
+    resp = mcp_server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    assert resp["result"]["serverInfo"]["version"] == mcp_server.__version__
 
 
 def test_mcp_agy_ask_timeout_surfaces_partial(monkeypatch):

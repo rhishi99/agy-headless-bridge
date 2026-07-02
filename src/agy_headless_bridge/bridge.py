@@ -84,16 +84,29 @@ def _collapse_carriage_returns(text: str) -> str:
 
 
 def clean(raw: str) -> str:
-    """Strip ANSI escapes, spinner repaints, and TUI chrome from agy output."""
+    """Strip ANSI escapes, spinner repaints, and TUI chrome from agy output.
+
+    Only lines that actually carried box-drawing/spinner glyphs are treated as
+    decorative (their glyphs are removed, then the remainder is trimmed, and if
+    nothing's left the line is dropped). Plain lines — including real code
+    indentation and genuinely blank lines — pass through untouched aside from
+    trailing whitespace, so returned code stays syntactically valid.
+    """
     text = _strip_ansi(raw)
     text = _collapse_carriage_returns(text)
     # Drop remaining control chars except tab/newline.
     text = "".join(ch for ch in text if ch in "\n\t" or ord(ch) >= 0x20)
     cleaned = []
     for line in text.split("\n"):
-        stripped = "".join(c for c in line if c not in _SPINNER).strip()
-        if stripped:
-            cleaned.append(stripped)
+        had_chrome = any(c in _SPINNER for c in line)
+        without_chrome = "".join(c for c in line if c not in _SPINNER)
+        if had_chrome:
+            bare = without_chrome.strip()
+            if not bare:
+                continue  # pure decoration (border/spinner) — drop the line
+            cleaned.append(bare)
+        else:
+            cleaned.append(without_chrome.rstrip())
     return "\n".join(cleaned).strip()
 
 
@@ -188,6 +201,13 @@ def _run_windows(
 
     start = time.monotonic()
     while not done.wait(1.0):  # poll in ~1s slices
+        if not proc.isalive():
+            # Child already exited. pywinpty doesn't reliably raise EOFError on
+            # a silent (no-output) exit, so the reader thread's proc.read() can
+            # block forever with `done` never set. Don't wait on it — force it
+            # closed and return whatever (possibly nothing) was captured.
+            _terminate_windows(proc, t)
+            return clean("".join(chunks))
         now = time.monotonic()
         if now - last_activity[0] > idle_timeout:
             _terminate_windows(proc, t)
@@ -339,8 +359,12 @@ def build_argv(
     if model:
         argv += ["--model", model]
     # Tell agy to give up ~15s before our pty hard-kills it, so it can emit a
-    # clean message instead of being severed mid-write.
-    inner = max(30, int(timeout) - 15)
+    # clean message instead of being severed mid-write. Must stay strictly
+    # below `timeout`, or agy's own deadline can equal/exceed ours and the
+    # hard-kill severs it mid-write anyway — the exact thing this margin
+    # exists to prevent (bites callers who pass a small custom --timeout).
+    inner = max(5, int(timeout) - 15)
+    inner = max(1, min(inner, int(timeout) - 1))
     argv += ["--print-timeout", f"{inner}s"]
     argv += list(extra_args or [])
     argv += ["-p", prompt]
