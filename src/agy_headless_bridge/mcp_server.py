@@ -129,15 +129,13 @@ def handle_request(req: dict) -> dict | None:
     params = req.get("params", {}) or {}
 
     if method == "initialize":
-        # Echo the client's requested version if we speak it too; otherwise
-        # fall back to ours so the client can decide whether to proceed.
-        requested = params.get("protocolVersion")
-        negotiated = requested if requested == PROTOCOL_VERSION else PROTOCOL_VERSION
+        # We only speak one protocol version; always report it so the client
+        # can decide whether to proceed.
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": negotiated,
+                "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "agy-headless-bridge", "version": __version__},
             },
