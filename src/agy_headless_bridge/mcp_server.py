@@ -189,6 +189,15 @@ def handle_request(req: dict) -> dict | None:
 
 
 def main() -> int:
+    # Force UTF-8 on stdio regardless of the host locale (e.g. cp936/GBK on
+    # Chinese Windows). MCP clients serialize JSON-RPC as UTF-8; reading with
+    # the locale codec mangles non-ASCII prompts into mojibake + surrogate
+    # escapes, which later panics pywinpty's UTF-16 conversion when agy's
+    # argv is built (pyo3 "assertion `left == right` failed").
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     for line in sys.stdin:
         line = line.strip()
         if not line:
