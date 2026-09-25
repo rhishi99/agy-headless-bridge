@@ -188,7 +188,7 @@ class AgyQuotaError(AgyExitError):
 
 _QUOTA_RE = re.compile(
     r"quota|rate[ _-]?limit|RESOURCE_EXHAUSTED|(?<!\d)429(?!\d)"
-    r"|too many requests|exhausted",
+    r"|too many requests",
     re.IGNORECASE,
 )
 # "4 hours", "28 mins", "30s", "4h50m" -> (number, first letter of unit).

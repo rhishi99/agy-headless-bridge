@@ -364,6 +364,12 @@ def test_quota_words_on_success_are_not_an_error():
     assert bridge._check_exit("ok", None) == "ok"
 
 
+def test_unrelated_exhausted_failure_is_not_quota():
+    with pytest.raises(bridge.AgyExitError) as ei:
+        bridge._check_exit("retries exhausted", 1)
+    assert not isinstance(ei.value, bridge.AgyQuotaError)
+
+
 @pytest.mark.parametrize("text,expected", [
     ("resets in approximately 4 hours and 50 minutes", 17400),
     ("retry after ~28 minutes", 1680),
