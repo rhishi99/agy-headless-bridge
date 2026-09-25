@@ -62,8 +62,9 @@ EXIT_QUOTA = 75
 PTY_COLS = 2000
 PTY_ROWS = 50
 
-# Windows: once the reader hits EOF, how long to wait for the child to report
-# its exit status before giving up on it (status then reads as unknown).
+# Windows: after the child exits, how long to let the reader drain before the
+# pty is force-closed, and (after reader EOF) how long to wait for the child's
+# exit status before it reads as unknown.
 _EXIT_DRAIN_SECONDS = 2.0
 
 # --- ANSI / TUI noise stripping -------------------------------------------
@@ -279,10 +280,12 @@ def _run_windows(
     start = time.monotonic()
     while not done.wait(1.0):  # poll in ~1s slices
         if not proc.isalive():
-            # Child already exited. pywinpty doesn't reliably raise EOFError on
-            # a silent (no-output) exit, so the reader thread's proc.read() can
-            # block forever with `done` never set. Don't wait on it — read the
-            # exit status, force it closed and return whatever was captured.
+            # Child already exited. Give a lagging reader a bounded window to
+            # drain what's still in flight: closing the pty under it dropped
+            # the answer's tail (seen under load in the test suite). Bounded,
+            # because pywinpty doesn't reliably raise EOFError on a silent
+            # exit, so read() can block forever with `done` never set.
+            done.wait(_EXIT_DRAIN_SECONDS)
             rc = _exitstatus(proc)
             _terminate_windows(proc, t)
             return clean("".join(chunks)), rc
