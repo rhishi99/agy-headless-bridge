@@ -6,6 +6,7 @@ test that actually invokes `agy` is skipped automatically when the binary is
 not installed/authenticated, so CI without Antigravity still passes.
 """
 
+import json
 import os
 import sys
 import textwrap
@@ -317,6 +318,159 @@ def test_mcp_agy_ask_timeout_surfaces_partial(monkeypatch):
         raise bridge.AgyTimeoutError("agy idle for 120s", partial="HALF DONE")
 
     monkeypatch.setattr(mcp_server, "run", fake_run)
-    out = mcp_server._call_agy("do it", add_dirs=[os.getcwd()])
+    out, is_error = mcp_server._call_agy("do it", add_dirs=[os.getcwd()])
     assert "HALF DONE" in out
     assert "agy -c" in out  # tells caller how to resume
+    assert is_error
+
+
+# --- exit status + quota classification ------------------------------------
+
+def test_pty_nonzero_exit_raises_with_output(tmp_path):
+    stub = tmp_path / "fail_stub.py"
+    stub.write_text("import sys; print('bad model id'); sys.exit(3)")
+    with pytest.raises(bridge.AgyExitError) as ei:
+        bridge._pty_run([sys.executable, str(stub)], timeout=60)
+    assert ei.value.returncode == 3
+    assert "bad model id" in ei.value.output
+    assert not isinstance(ei.value, bridge.AgyQuotaError)
+
+
+def test_pty_quota_exit_raises_quota_error(tmp_path):
+    stub = tmp_path / "quota_stub.py"
+    stub.write_text(
+        "import sys; print('429 RESOURCE_EXHAUSTED: quota resets in 4 hours "
+        "and 50 minutes'); sys.exit(1)"
+    )
+    with pytest.raises(bridge.AgyQuotaError) as ei:
+        bridge._pty_run([sys.executable, str(stub)], timeout=60)
+    assert ei.value.reset_seconds == 4 * 3600 + 50 * 60
+
+
+def test_pty_tail_output_not_truncated_on_exit(tmp_path):
+    # Many lines then an immediate exit: the reader must drain ConPTY's final
+    # flush before the pty is force-closed.
+    stub = tmp_path / "burst_stub.py"
+    stub.write_text(
+        "import sys\nfor i in range(400): print(f'line{i}')\nprint('THE_END')"
+    )
+    out = bridge._pty_run([sys.executable, str(stub)], timeout=60)
+    assert "THE_END" in out
+
+
+def test_quota_words_on_success_are_not_an_error():
+    # An answer that merely discusses 429s must not be misread as a quota hit.
+    assert bridge._check_exit("handle 429 rate limit errors", 0) == "handle 429 rate limit errors"
+    assert bridge._check_exit("ok", None) == "ok"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("resets in approximately 4 hours and 50 minutes", 17400),
+    ("retry after ~28 minutes", 1680),
+    ("try again in 30s", 30),
+    ("resets in 4h50m", 17400),
+    ("429 status: see 5 hrs", 18000),
+    ("quota exhausted", None),
+])
+def test_parse_reset_seconds(text, expected):
+    assert bridge.parse_reset_seconds(text) == expected
+
+
+def test_cli_passes_agy_exit_code_through(monkeypatch, capsys):
+    monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
+
+    def boom(*a, **k):
+        raise bridge.AgyExitError("agy exited with status 64", 64, "unknown model")
+
+    monkeypatch.setattr(bridge, "_pty_run", boom)
+    assert bridge.main(["hi"]) == 64
+    assert "unknown model" in capsys.readouterr().out
+
+
+def test_cli_quota_uses_tempfail_exit(monkeypatch):
+    monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
+
+    def boom(*a, **k):
+        raise bridge.AgyQuotaError("quota", 1, "", 60)
+
+    monkeypatch.setattr(bridge, "_pty_run", boom)
+    assert bridge.main(["hi"]) == bridge.EXIT_QUOTA
+
+
+def test_skip_permissions_flag_reaches_argv(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
+    monkeypatch.setattr(
+        bridge, "_pty_run",
+        lambda argv, *a, **k: captured.setdefault("argv", argv) or "out",
+    )
+    bridge.main(["--skip-permissions", "edit it"])
+    assert "--dangerously-skip-permissions" in captured["argv"]
+    assert "--dangerously-skip-permissions" not in bridge.build_argv("agy", "x")
+
+
+# --- MCP protocol hygiene ----------------------------------------------------
+
+def test_mcp_notifications_get_no_reply():
+    for method in ("notifications/initialized", "notifications/cancelled"):
+        assert mcp_server.handle_request({"jsonrpc": "2.0", "method": method}) is None
+
+
+def test_mcp_tool_failure_sets_is_error(monkeypatch):
+    def fake_run(prompt, **kwargs):
+        raise bridge.AgyQuotaError("quota hit", 1, "RESOURCE_EXHAUSTED", 120)
+
+    monkeypatch.setattr(mcp_server, "run", fake_run)
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "agy_ask", "arguments": {"prompt": "x"}},
+    })
+    assert resp["result"]["isError"] is True
+    assert "QUOTA" in resp["result"]["content"][0]["text"]
+
+
+def test_mcp_success_has_no_is_error(monkeypatch):
+    monkeypatch.setattr(mcp_server, "run", lambda prompt, **k: "fine")
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "agy_ask", "arguments": {"prompt": "x"}},
+    })
+    assert "isError" not in resp["result"]
+
+
+def test_mcp_research_rejects_empty_query(monkeypatch):
+    monkeypatch.setattr(mcp_server, "run", lambda *a, **k: pytest.fail("ran agy"))
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "agy_research", "arguments": {"query": "  "}},
+    })
+    assert resp["result"]["isError"] is True
+
+
+def test_mcp_skip_permissions_needs_server_opt_in(monkeypatch):
+    monkeypatch.delenv(mcp_server.SKIP_PERMISSIONS_ENV, raising=False)
+    monkeypatch.setattr(mcp_server, "run", lambda *a, **k: pytest.fail("ran agy"))
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "agy_ask",
+                   "arguments": {"prompt": "x", "skip_permissions": True}},
+    })
+    assert resp["result"]["isError"] is True
+
+    monkeypatch.setenv(mcp_server.SKIP_PERMISSIONS_ENV, "1")
+    cap = _agy_ask({"prompt": "x", "skip_permissions": True}, monkeypatch)
+    assert cap["skip_permissions"] is True
+
+
+def test_mcp_server_decodes_utf8_stdin():
+    import subprocess
+
+    req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": "nope", "arguments": {}}}
+    line = json.dumps(req).replace('"nope"', '"café"', 1)
+    proc = subprocess.run(
+        [sys.executable, "-m", "agy_headless_bridge.mcp_server"],
+        input=(line + "\n").encode("utf-8"), capture_output=True, timeout=60,
+    )
+    resp = json.loads(proc.stdout.decode("utf-8").splitlines()[0])
+    assert "café" in resp["error"]["message"]  # not "cafÃ©"

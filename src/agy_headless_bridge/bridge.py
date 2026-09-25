@@ -53,6 +53,19 @@ DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "900"))
 # poll. Override with $AGY_BRIDGE_IDLE_TIMEOUT.
 DEFAULT_IDLE_TIMEOUT = float(os.environ.get("AGY_BRIDGE_IDLE_TIMEOUT", "120"))
 
+# CLI exit status when agy's quota is spent (EX_TEMPFAIL: retry later), so a
+# caller script can tell "wait / rotate account" apart from a real failure.
+EXIT_QUOTA = 75
+
+# Pty geometry. Very wide so agy never hard-wraps: at 200 cols a wrap landed
+# mid-word ("handl e the") once callers re-joined lines. Tall to avoid paging.
+PTY_COLS = 2000
+PTY_ROWS = 50
+
+# Windows: once the reader hits EOF, how long to wait for the child to report
+# its exit status before giving up on it (status then reads as unknown).
+_EXIT_DRAIN_SECONDS = 2.0
+
 # --- ANSI / TUI noise stripping -------------------------------------------
 
 # CSI sequences (colors, cursor moves), OSC sequences (window titles), lone esc.
@@ -145,6 +158,71 @@ class AgyNotFoundError(RuntimeError):
     pass
 
 
+class AgyExitError(RuntimeError):
+    """Raised when agy exits with a non-zero status (bad --model, auth, crash).
+
+    `.returncode` is agy's exit status; `.output` is whatever cleaned text it
+    printed, which usually explains the failure.
+    """
+
+    def __init__(self, message: str, returncode: int, output: str = "") -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.output = output
+
+
+class AgyQuotaError(AgyExitError):
+    """agy failed because the account's model quota / rate limit is spent.
+
+    `.reset_seconds` is parsed from agy's message ("resets in 4 hours and 50
+    minutes") when present, else None. Retrying before then only burns calls.
+    """
+
+    def __init__(
+        self, message: str, returncode: int, output: str = "",
+        reset_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message, returncode, output)
+        self.reset_seconds = reset_seconds
+
+
+_QUOTA_RE = re.compile(
+    r"quota|rate[ _-]?limit|RESOURCE_EXHAUSTED|(?<!\d)429(?!\d)"
+    r"|too many requests|exhausted",
+    re.IGNORECASE,
+)
+# "4 hours", "28 mins", "30s", "4h50m" -> (number, first letter of unit).
+_DURATION_RE = re.compile(
+    r"(\d+)\s*(h|m|s)(?:ours?|rs?|inutes?|ins?|econds?|ecs?)?(?![a-z])"
+)
+_UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
+
+
+def parse_reset_seconds(text: str) -> int | None:
+    """Seconds until quota resets, from prose like 'resets in 4 hours and 50
+    minutes' / 'retry after ~28 minutes' / 'in 30s'. None if no duration found."""
+    hits: dict[str, int] = {}
+    for n, unit in _DURATION_RE.findall(text.lower()):
+        hits.setdefault(unit, int(n))  # first mention of each unit wins
+    return sum(n * _UNIT_SECONDS[u] for u, n in hits.items()) if hits else None
+
+
+def _check_exit(output: str, returncode: int | None) -> str:
+    """Return output on success; raise AgyQuotaError / AgyExitError on failure.
+
+    Quota is only inferred on a non-zero exit: matching the words on a
+    successful run would misfire on any answer that merely discusses 429s.
+    """
+    if not returncode:  # 0, or None when the status is unknowable
+        return output
+    if _QUOTA_RE.search(output):
+        raise AgyQuotaError(
+            f"agy quota / rate limit hit (exit {returncode})",
+            returncode, output, parse_reset_seconds(output),
+        )
+    raise AgyExitError(f"agy exited with status {returncode}", returncode, output)
+
+
 class AgyTimeoutError(TimeoutError):
     """Raised when agy is killed by the idle or hard timeout.
 
@@ -163,7 +241,7 @@ class AgyTimeoutError(TimeoutError):
 
 def _run_windows(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
-) -> str:
+) -> tuple[str, int | None]:
     try:
         from winpty import PtyProcess  # type: ignore
     except ImportError as exc:  # pragma: no cover - env-specific
@@ -171,11 +249,10 @@ def _run_windows(
             "pywinpty is required on Windows. Install: pip install pywinpty"
         ) from exc
 
-    # Wide cols so agy does not hard-wrap; tall rows to avoid paging.
     # NB: ConPTY batches output and may not surface a partial (un-terminated)
     # line until the child exits, so `.partial` on a Windows timeout is
     # best-effort — it holds whatever ConPTY had already flushed, often empty.
-    proc = PtyProcess.spawn(argv, dimensions=(50, 200))
+    proc = PtyProcess.spawn(argv, dimensions=(PTY_ROWS, PTY_COLS))
     chunks: list[str] = []
     # A 1-slot mutable timestamp the reader bumps on every chunk; the main loop
     # polls it to detect a stall without blocking on the read itself.
@@ -204,10 +281,11 @@ def _run_windows(
         if not proc.isalive():
             # Child already exited. pywinpty doesn't reliably raise EOFError on
             # a silent (no-output) exit, so the reader thread's proc.read() can
-            # block forever with `done` never set. Don't wait on it — force it
-            # closed and return whatever (possibly nothing) was captured.
+            # block forever with `done` never set. Don't wait on it — read the
+            # exit status, force it closed and return whatever was captured.
+            rc = _exitstatus(proc)
             _terminate_windows(proc, t)
-            return clean("".join(chunks))
+            return clean("".join(chunks)), rc
         now = time.monotonic()
         if now - last_activity[0] > idle_timeout:
             _terminate_windows(proc, t)
@@ -220,7 +298,16 @@ def _run_windows(
                 f"agy exceeded hard timeout {timeout:.0f}s", clean("".join(chunks))
             )
 
-    return clean("".join(chunks))
+    # Reader hit EOF, so the child is exiting; give it a moment to report status.
+    deadline = time.monotonic() + _EXIT_DRAIN_SECONDS
+    while proc.isalive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return clean("".join(chunks)), _exitstatus(proc)
+
+
+def _exitstatus(proc) -> int | None:
+    """agy's exit code, or None if the child is still alive."""
+    return None if proc.isalive() else proc.exitstatus
 
 
 def _terminate_windows(proc, t: threading.Thread) -> None:
@@ -233,14 +320,25 @@ def _terminate_windows(proc, t: threading.Thread) -> None:
 
 def _run_posix(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
-) -> str:
+) -> tuple[str, int | None]:
     import pty
     import select
     import subprocess
 
     master_fd, slave_fd = pty.openpty()
-    # Hint a wide terminal so agy doesn't hard-wrap its answer.
-    env = {**os.environ, "COLUMNS": "200", "LINES": "50", "TERM": "xterm-256color"}
+    # Set a wide window on the pty itself (what tty-aware code queries) and
+    # mirror it in env, so agy doesn't hard-wrap its answer.
+    import fcntl
+    import struct
+    import termios
+
+    fcntl.ioctl(
+        slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0)
+    )
+    env = {
+        **os.environ, "COLUMNS": str(PTY_COLS), "LINES": str(PTY_ROWS),
+        "TERM": "xterm-256color",
+    }
     try:
         proc = subprocess.Popen(
             argv,
@@ -297,7 +395,7 @@ def _run_posix(
     if timed_out is not None:
         timed_out.partial = cleaned  # carry whatever agy produced before the kill
         raise timed_out
-    return cleaned
+    return cleaned, proc.returncode
 
 
 # --- public API ------------------------------------------------------------
@@ -312,11 +410,12 @@ def _pty_run(
     test suite calls it with a stub command to exercise the real pty machinery
     without needing `agy` installed.
 
-    Raises AgyTimeoutError (carrying partial output) on idle or hard timeout.
+    Raises AgyTimeoutError (carrying partial output) on idle or hard timeout,
+    AgyQuotaError / AgyExitError (carrying output) on a non-zero exit.
     """
-    if sys.platform == "win32":
-        return _run_windows(argv, timeout, idle_timeout)
-    return _run_posix(argv, timeout, idle_timeout)
+    runner = _run_windows if sys.platform == "win32" else _run_posix
+    output, returncode = runner(argv, timeout, idle_timeout)
+    return _check_exit(output, returncode)
 
 
 def resolve_add_dirs(
@@ -346,6 +445,7 @@ def build_argv(
     model: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     extra_args: list[str] | None = None,
+    skip_permissions: bool = False,
 ) -> list[str]:
     """Assemble the agy argv. Split out so it is testable without spawning.
 
@@ -358,6 +458,10 @@ def build_argv(
         argv += ["--add-dir", d]
     if model:
         argv += ["--model", model]
+    if skip_permissions:
+        # Headless agy can't answer tool-permission prompts: without this it
+        # silently declines every file write / command and still exits 0.
+        argv.append("--dangerously-skip-permissions")
     # Tell agy to give up ~15s before our pty hard-kills it, so it can emit a
     # clean message instead of being severed mid-write. Must stay strictly
     # below `timeout`, or agy's own deadline can equal/exceed ours and the
@@ -380,6 +484,7 @@ def run(
     model: str | None = None,
     extra_args: list[str] | None = None,
     idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    skip_permissions: bool = False,
 ) -> str:
     """
     Run `agy -p <prompt>` through a fresh pty and return its cleaned stdout.
@@ -391,8 +496,14 @@ def run(
     has gone silent. A long-but-active task survives the wall; a stalled one dies
     at the idle bound.
 
+    `skip_permissions` passes `--dangerously-skip-permissions`, which headless
+    agy needs to actually edit files or run commands (it cannot answer approval
+    prompts). It lets agy act unattended in `add_dirs` — opt in deliberately.
+
     Raises AgyNotFoundError if `agy` can't be located, AgyTimeoutError (with
-    `.partial`) on timeout. Returns "" if agy genuinely emitted nothing.
+    `.partial`) on timeout, AgyQuotaError (with `.reset_seconds`) when the
+    quota is spent, AgyExitError (with `.returncode`, `.output`) on any other
+    non-zero exit. Returns "" if agy genuinely emitted nothing.
     """
     if not prompt or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
@@ -407,6 +518,7 @@ def run(
     argv = build_argv(
         path, prompt, add_dirs=add_dirs, model=model,
         timeout=timeout, extra_args=extra_args,
+        skip_permissions=skip_permissions,
     )
     return _pty_run(argv, timeout, idle_timeout)
 
@@ -415,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     argv = argv if argv is not None else sys.argv[1:]
+    force_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="agy-bridge",
         description="Call the Antigravity CLI (agy) headlessly via a pty.",
@@ -441,6 +554,11 @@ def main(argv: list[str] | None = None) -> int:
         help="do not auto-add the current directory to agy's workspace "
              "(use for research / Q&A that needs no repo context)",
     )
+    parser.add_argument(
+        "--skip-permissions", action="store_true",
+        help="pass --dangerously-skip-permissions so agy can edit files / run "
+             "commands unattended (headless agy otherwise declines silently)",
+    )
     args = parser.parse_args(argv)
     prompt = " ".join(args.prompt)
     # Coding-shaped by default: inject cwd unless explicitly opted out or the
@@ -450,10 +568,22 @@ def main(argv: list[str] | None = None) -> int:
         output = run(
             prompt, timeout=args.timeout, idle_timeout=args.idle_timeout,
             add_dirs=add_dirs, model=args.model,
+            skip_permissions=args.skip_permissions,
         )
     except AgyNotFoundError as exc:
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 127
+    except AgyExitError as exc:
+        if exc.output:
+            print(exc.output)
+        if isinstance(exc, AgyQuotaError):
+            when = f"; resets in ~{exc.reset_seconds}s" if exc.reset_seconds else ""
+            sys.stderr.write(f"[agy-bridge] {exc}{when}\n")
+            return EXIT_QUOTA
+        sys.stderr.write(f"[agy-bridge] {exc}\n")
+        # Pass agy's status through; a signal death (negative on POSIX) or an
+        # out-of-range Windows code collapses to a generic 1.
+        return exc.returncode if 0 < exc.returncode < 256 else 1
     except AgyTimeoutError as exc:
         if exc.partial:
             print(exc.partial)  # surface partial work instead of dropping it
@@ -473,6 +603,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(output)
     return 0
+
+
+def force_utf8_stdio() -> None:
+    """Windows pipes default to the ANSI codepage (cp1252): printing an answer
+    containing e.g. '₹' or an emoji raised UnicodeEncodeError and lost the
+    whole (possibly many-minute) result. Force UTF-8 on all three std streams
+    (stdin too, for the MCP server, which reads UTF-8 JSON-RPC)."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):  # pragma: no cover - replaced stream
+            pass
 
 
 if __name__ == "__main__":
