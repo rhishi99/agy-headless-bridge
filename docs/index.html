@@ -121,6 +121,7 @@
     <div class="eyebrow">The problem</div>
     <h2>agy goes silent when nobody's at the terminal</h2>
     <p class="lead"><code>agy -p "&lt;prompt&gt;"</code> gates its stdout on <code>isatty()</code>. The moment stdout is <strong>not</strong> a real terminal — any automation — it prints nothing and exits <code>0</code>. No error, no output, just emptiness.</p>
+    <p style="color:var(--mut);font-size:14px"><strong>Update (v1.3.0):</strong> newer agy releases fixed this upstream (piped output works on agy 1.2.11). The bridge still adds idle/hard timeouts with partial output, typed errors for failed runs and spent quota (<code>AgyExitError</code> / <code>AgyQuotaError</code>), clean TUI-free text, support for older agy builds, and a dependency-free MCP server.</p>
     <div class="ba">
       <div class="panel bad">
         <h4><span class="pill b">BEFORE</span> piped / subprocess</h4>
