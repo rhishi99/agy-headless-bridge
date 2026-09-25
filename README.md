@@ -87,6 +87,14 @@ $            # empty. exit 0. nothing.
 The common `winpty agy -p "..."` workaround needs a terminal that **already
 exists**, so it still fails from any automated / non-TTY caller.
 
+> [!NOTE]
+> **Newer agy releases fixed this upstream:** `agy -p "..." | cat` printed
+> normally on agy 1.2.11 (Windows, checked Sep 2026). The bridge still earns its
+> place there. It works on older agy builds. It kills a hung run on an idle
+> timer and keeps partial output. It turns a failed exit or a spent quota into a
+> typed error (`AgyExitError` / `AgyQuotaError`). It strips TUI noise, and it
+> ships a dependency-free MCP server.
+
 ## The fix — give agy a tty it didn't ask for
 
 Allocate a **brand-new** pseudo-terminal (one that needs no parent tty) and
@@ -133,7 +141,8 @@ Before installing this bridge you need:
    - Authenticate once interactively (`agy` opens a browser OAuth flow), or set
      `ANTIGRAVITY_API_KEY` in your environment if you use an API key.
    - Verify it runs *in a real terminal*: `agy -p "say hi"` should print a reply.
-     (From a pipe it won't — that's the very bug this package fixes.)
+     (On older agy builds it prints nothing from a pipe. That's the bug this
+     package was built to fix.)
 3. **Windows only:** `pywinpty` (installed automatically as a dependency).
    POSIX uses the stdlib `pty` module — nothing extra.
 
@@ -168,7 +177,9 @@ OS default install paths.
 ### Library
 
 ```python
-from agy_headless_bridge import run, AgyNotFoundError, AgyTimeoutError
+from agy_headless_bridge import (
+    run, AgyExitError, AgyNotFoundError, AgyQuotaError, AgyTimeoutError,
+)
 
 try:
     # For a CODING task, pass the repo so agy can see it — the library `run()`
@@ -177,17 +188,34 @@ try:
     print(run("Summarize this repo", add_dirs=["."], timeout=600))
 except AgyTimeoutError as exc:
     print("timed out; partial so far:\n", exc.partial)  # resume with `agy -c`
+except AgyQuotaError as exc:                  # subclass of AgyExitError
+    print("quota spent; retry in", exc.reset_seconds, "s")  # None if unknown
+except AgyExitError as exc:
+    print(f"agy failed (exit {exc.returncode}):\n{exc.output}")
 except AgyNotFoundError:
     print("install agy first")
 ```
 
 `run(prompt, timeout=900, agy_path=None, *, add_dirs=None, model=None,
-idle_timeout=120, extra_args=None) -> str` — raises `AgyNotFoundError` if the
-binary is missing, `AgyTimeoutError` (carrying `.partial`) on the idle or hard
-timeout, `ValueError` on empty prompt. Returns `""` only if agy genuinely
-emitted nothing. `add_dirs` → agy `--add-dir`; `model` → `--model`. The
-`timeout` is the absolute ceiling; `idle_timeout` ends a run that has gone
-silent for that many seconds (so a long-but-active task survives the ceiling).
+idle_timeout=120, extra_args=None, skip_permissions=False) -> str` raises:
+
+- `AgyNotFoundError` if the binary is missing.
+- `AgyTimeoutError`, carrying `.partial`, on the idle or hard timeout.
+- `AgyQuotaError`, carrying `.reset_seconds` parsed from agy's message, when agy
+  exits non-zero with a quota or rate-limit message.
+- `AgyExitError`, carrying `.returncode` and `.output`, on any other non-zero
+  exit, such as an unknown `--model`.
+- `ValueError` on an empty prompt.
+
+It returns `""` only if agy genuinely emitted nothing. `add_dirs` → agy
+`--add-dir`; `model` → `--model`. The `timeout` is the absolute ceiling;
+`idle_timeout` ends a run that has gone silent for that many seconds (so a
+long-but-active task survives the ceiling).
+
+`skip_permissions=True` passes `--dangerously-skip-permissions`. Headless agy
+cannot answer tool-approval prompts, so without it agy **silently declines every
+file edit and command and still exits 0**. With it, agy acts unattended inside
+`add_dirs`. Opt in only for trusted prompts.
 
 To get the CLI/MCP "default to cwd for coding, none for research" behaviour in
 your own code, use `resolve_add_dirs(explicit, use_cwd_default=...)`.
@@ -217,6 +245,11 @@ agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
 | `--model NAME` | agy default | agy `--model`. |
 | `--timeout SECS` | `900` | Hard ceiling (absolute wall). |
 | `--idle-timeout SECS` | `120` | Kill after this many seconds of no output. |
+| `--skip-permissions` | off | Let agy edit files / run commands unattended (`--dangerously-skip-permissions`). |
+
+**Exit codes:** `0` success · agy's own code when agy fails (its message is
+printed) · `75` quota / rate limit spent (retry later) · `1` timeout or no
+output · `127` agy not found.
 
 ### MCP server
 
@@ -256,6 +289,7 @@ every call through the pty bridge.
 | `agy_ask` | `add_dir` | string[] | | explicit dirs for agy's workspace (overrides the `workspace` default) |
 | `agy_ask` | `model` | string | | agy `--model` |
 | `agy_ask` | `timeout` | number | | hard timeout override, seconds |
+| `agy_ask` | `skip_permissions` | boolean | | let agy edit files / run commands unattended. **Refused unless the server was started with `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`**, because the caller is itself a model |
 | `agy_research` | `query` | string | ✅ | wrapped as a deep-research prompt for agy (never attaches a workspace) |
 
 **Response shape** — a standard MCP `tools/call` result; the answer is the text
@@ -269,10 +303,15 @@ content:
 }
 ```
 
-On a timeout the `text` is whatever agy produced before the kill followed by an
-`[agy-mcp] TIMEOUT: ...; resume with 'agy -c'` note, so partial work isn't lost.
-On other failures the `text` is an `[agy-mcp] ERROR: ...` string (agy missing,
-etc.) rather than a JSON-RPC error, so the agent always gets a readable reply.
+Failures are still a readable `text` reply rather than a JSON-RPC error, but the
+result also carries `"isError": true` so the client can tell them apart from an
+answer:
+
+- **Timeout:** whatever agy produced before the kill, then an
+  `[agy-mcp] TIMEOUT: ...; resume with 'agy -c'` note, so partial work isn't lost.
+- **Quota spent:** agy's message, then `[agy-mcp] QUOTA: ...; resets in ~Ns`.
+- **Anything else:** agy's message (if any), then `[agy-mcp] ERROR: ...`. This
+  covers agy missing, a non-zero exit and bad arguments.
 
 ---
 
@@ -340,6 +379,7 @@ echo "$ANSWER"
 | `AGY_PATH` | auto-detect | Absolute path to the `agy` binary |
 | `AGY_BRIDGE_TIMEOUT` | `900` | Hard ceiling (absolute wall), in seconds |
 | `AGY_BRIDGE_IDLE_TIMEOUT` | `120` | Kill after this many seconds of no output from agy |
+| `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS` | unset | Set to `1` on the MCP server to allow the `skip_permissions` tool argument |
 
 ---
 

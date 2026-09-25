@@ -2,7 +2,16 @@
 
 from importlib.metadata import PackageNotFoundError, version as _version
 
-from .bridge import AgyNotFoundError, AgyTimeoutError, clean, find_agy, resolve_add_dirs, run
+from .bridge import (
+    AgyExitError,
+    AgyNotFoundError,
+    AgyQuotaError,
+    AgyTimeoutError,
+    clean,
+    find_agy,
+    resolve_add_dirs,
+    run,
+)
 
 try:
     __version__ = _version("agy-headless-bridge")
@@ -16,5 +25,7 @@ __all__ = [
     "resolve_add_dirs",
     "AgyNotFoundError",
     "AgyTimeoutError",
+    "AgyExitError",
+    "AgyQuotaError",
     "__version__",
 ]

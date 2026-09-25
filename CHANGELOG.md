@@ -6,6 +6,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-25
+
+### Changed
+- **agy's exit status is no longer thrown away.** A non-zero exit, such as an
+  unknown `--model`, bad auth or a crash, used to come back as ordinary text
+  (the CLI exited `0`). `run()` now raises `AgyExitError` (`.returncode`,
+  `.output`). The CLI prints agy's message and exits with agy's code. Callers
+  that relied on getting text back from a failed run must catch the new error.
+- Pty width raised from 200 to 2000 columns. At 200, agy's hard-wraps landed
+  mid-word ("handl e the") once callers re-joined lines. On POSIX, the size is
+  now also set on the pty itself (`TIOCSWINSZ`), not only through `COLUMNS`.
+
+### Added
+- `AgyQuotaError` (subclass of `AgyExitError`) when agy fails with a
+  quota / rate-limit message (`429`, `RESOURCE_EXHAUSTED`, ...). `.reset_seconds`
+  is parsed from prose like "resets in 4 hours and 50 minutes". The CLI exits
+  `75` (EX_TEMPFAIL) and MCP replies are prefixed `[agy-mcp] QUOTA:`. Quota is
+  only inferred on a non-zero exit, so an answer that merely discusses 429s is
+  not misread.
+- `skip_permissions` (library), `--skip-permissions` (CLI) and a
+  `skip_permissions` MCP argument pass `--dangerously-skip-permissions`.
+  Headless agy can't answer approval prompts and otherwise silently declines
+  every edit while still exiting 0. The MCP argument is refused unless the
+  server was started with `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`.
+- README notes that upstream bug #76 no longer reproduces on agy 1.2.11.
+
+### Fixed
+- MCP server garbled non-ASCII prompts on Windows. stdin was decoded with the
+  locale codec (cp1252, or cp936/GBK on Chinese Windows, where the surrogates
+  then crashed pywinpty). First fixed for the MCP server by @kingofotaku
+  (88dc6c1). The same UTF-8 forcing now also covers stderr and the CLI.
+- CLI crashed with `UnicodeEncodeError` when printing an answer containing
+  e.g. `₹` or an emoji to a Windows pipe, losing the whole result.
+- MCP server replied to notifications other than `notifications/initialized`
+  (e.g. `notifications/cancelled`) with an error. JSON-RPC forbids any reply.
+- MCP tool failures (timeout, quota, non-zero exit, agy missing) now set
+  `isError: true`, so clients can tell them from answers.
+- MCP `agy_research` with an empty query no longer runs agy.
+
 ## [1.2.1] — 2026-07-02
 
 ### Fixed
