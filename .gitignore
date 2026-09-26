@@ -10,3 +10,4 @@ venv/
 .env
 *.log
 *.stackdump
+.tmp/
