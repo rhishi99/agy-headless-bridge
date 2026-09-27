@@ -179,8 +179,8 @@ What the plugin runs and fetches:
 
 - **Fetches:** nothing from PyPI for this package — the plugin runs the source
   shipped in the plugin itself. On first start `uv run --frozen` (from
-  [uv](https://docs.astral.sh/uv/)) builds a virtualenv in the plugin's data
-  directory from the committed `uv.lock`. The only runtime dependency is
+  [uv](https://docs.astral.sh/uv/)) builds a virtualenv inside the plugin's
+  install directory from the committed `uv.lock`. The only runtime dependency is
   `pywinpty`, on Windows only.
 - **Runs:** `agy-mcp-server` from that source. Each tool call spawns the
   `agy` binary already on your machine inside a pseudo-terminal (ConPTY on

@@ -2,10 +2,7 @@
   "mcpServers": {
     "antigravity": {
       "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "--no-dev", "--quiet", "agy-mcp-server"],
-      "env": {
-        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"
-      }
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "--no-dev", "--quiet", "agy-mcp-server"]
     }
   }
 }
