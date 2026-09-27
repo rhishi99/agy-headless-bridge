@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "antigravity": {
-      "command": "uvx",
-      "args": ["--from", "agy-headless-bridge==1.3.0", "agy-mcp-server"]
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "--no-dev", "--quiet", "agy-mcp-server"],
+      "env": {
+        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"
+      }
     }
   }
 }

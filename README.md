@@ -177,10 +177,12 @@ This repo is also a Claude Code plugin (`.claude-plugin/plugin.json` +
 
 What the plugin runs and fetches:
 
-- **Fetches:** `uvx` (from [uv](https://docs.astral.sh/uv/)) downloads the
-  pinned PyPI package `agy-headless-bridge==1.3.0` on first start. Its only
-  dependency is `pywinpty`, on Windows only.
-- **Runs:** `agy-mcp-server` from that package. Each tool call spawns the
+- **Fetches:** nothing from PyPI for this package — the plugin runs the source
+  shipped in the plugin itself. On first start `uv run --frozen` (from
+  [uv](https://docs.astral.sh/uv/)) builds a virtualenv in the plugin's data
+  directory from the committed `uv.lock`. The only runtime dependency is
+  `pywinpty`, on Windows only.
+- **Runs:** `agy-mcp-server` from that source. Each tool call spawns the
   `agy` binary already on your machine inside a pseudo-terminal (ConPTY on
   Windows, `pty` on POSIX), passes your prompt to it, and returns the cleaned
   text output. `agy` itself contacts Google's Antigravity service using your
