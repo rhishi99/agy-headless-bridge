@@ -170,6 +170,34 @@ pip install -e .
 The bridge locates the binary via, in order: `$AGY_PATH` → `agy` on `PATH` →
 OS default install paths.
 
+### As a Claude Code plugin
+
+This repo is also a Claude Code plugin (`.claude-plugin/plugin.json` +
+`.mcp.json`). Installing it registers one local stdio MCP server, `antigravity`.
+
+What the plugin runs and fetches:
+
+- **Fetches:** `uvx` (from [uv](https://docs.astral.sh/uv/)) downloads the
+  pinned PyPI package `agy-headless-bridge==1.3.0` on first start. Its only
+  dependency is `pywinpty`, on Windows only.
+- **Runs:** `agy-mcp-server` from that package. Each tool call spawns the
+  `agy` binary already on your machine inside a pseudo-terminal (ConPTY on
+  Windows, `pty` on POSIX), passes your prompt to it, and returns the cleaned
+  text output. `agy` itself contacts Google's Antigravity service using your
+  own `agy` login or `ANTIGRAVITY_API_KEY`.
+- **Tools:** `agy_ask` and `agy_research`. By default `agy_ask` adds the
+  server's working directory (your project) to agy's workspace, so agy can
+  read it; pass `workspace: "none"` to opt out. agy can edit files or run
+  commands only if `agy_ask` is called with `skip_permissions: true` *and*
+  the server was started with `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`; the
+  plugin does not set that variable.
+- **Does not:** install or authenticate `agy`, bundle credentials, open
+  network ports, or send data anywhere other than through the `agy` you run.
+
+Requirements: `uv` on `PATH` and an installed, authenticated `agy` (see
+Prerequisites). Local MCP servers load in Claude Code and in Cowork sessions
+running on your computer; claude.ai chat ignores them.
+
 ---
 
 ## Usage

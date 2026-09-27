@@ -1,0 +1,12 @@
+{
+  "name": "agy-headless-bridge",
+  "version": "1.3.0",
+  "description": "MCP server that runs Google's Antigravity CLI (agy) headlessly inside a pseudo-terminal and returns its cleaned output to Claude Code.",
+  "author": {
+    "name": "rhishi99",
+    "url": "https://github.com/rhishi99"
+  },
+  "repository": "https://github.com/rhishi99/agy-headless-bridge",
+  "license": "MIT",
+  "keywords": ["antigravity", "agy", "gemini", "mcp", "headless"]
+}

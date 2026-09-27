@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "antigravity": {
+      "command": "uvx",
+      "args": ["--from", "agy-headless-bridge==1.3.0", "agy-mcp-server"]
+    }
+  }
+}
