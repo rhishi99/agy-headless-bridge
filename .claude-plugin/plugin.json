@@ -6,6 +6,8 @@
     "name": "rhishi99",
     "url": "https://github.com/rhishi99"
   },
+  "homepage": "https://rhishi99.github.io/agy-headless-bridge/",
+  "privacyPolicyUrl": "https://github.com/rhishi99/agy-headless-bridge#as-a-claude-code-plugin",
   "repository": "https://github.com/rhishi99/agy-headless-bridge",
   "license": "MIT",
   "keywords": ["antigravity", "agy", "gemini", "mcp", "headless"]
