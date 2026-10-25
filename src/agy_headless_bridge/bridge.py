@@ -51,7 +51,9 @@ DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "900"))
 # stays alive regardless of total elapsed time, while a truly hung agy dies fast.
 # This is the in-process "is it still printing?" check — the caller need not
 # poll. Override with $AGY_BRIDGE_IDLE_TIMEOUT.
-DEFAULT_IDLE_TIMEOUT = float(os.environ.get("AGY_BRIDGE_IDLE_TIMEOUT", "120"))
+# 300, not 120: `agy -p` is silent while it thinks, and a gemini-3.8-flash web
+# research answer took 218 s with no output in between (measured 25 Oct 2026).
+DEFAULT_IDLE_TIMEOUT = float(os.environ.get("AGY_BRIDGE_IDLE_TIMEOUT", "300"))
 
 # CLI exit status when agy's quota is spent (EX_TEMPFAIL: retry later), so a
 # caller script can tell "wait / rotate account" apart from a real failure.

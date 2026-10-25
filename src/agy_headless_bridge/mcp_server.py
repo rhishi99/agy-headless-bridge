@@ -43,6 +43,7 @@ from .bridge import (
     AgyNotFoundError,
     AgyQuotaError,
     AgyTimeoutError,
+    DEFAULT_IDLE_TIMEOUT,
     force_utf8_stdio,
     resolve_add_dirs,
     run,
@@ -134,6 +135,9 @@ def _call_agy(
     }
     if timeout is not None:
         kwargs["timeout"] = timeout
+        # `agy -p` prints nothing until its answer is ready, so a caller's longer
+        # budget must lift the idle bound too, or it still dies at the default.
+        kwargs["idle_timeout"] = max(timeout, DEFAULT_IDLE_TIMEOUT)
     try:
         out = run(prompt, **kwargs)
     except AgyNotFoundError as exc:
