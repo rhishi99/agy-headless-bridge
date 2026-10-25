@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-25
+
+### Fixed
+- **A caller's `timeout` no longer dies at the idle bound.** `agy -p` prints
+  nothing until its answer is ready; a web research call was silent for 218 s
+  and the 120 s idle timer killed it even with `timeout=600`. When `timeout` is
+  given and `idle_timeout` is not, the idle bound now equals `timeout` (library,
+  CLI and MCP). The default idle bound is 300 s.
+- **`agy_research` could not run long at all**: it took no `timeout`. It now
+  takes `timeout` (default 900 s, also its idle bound) and `model`.
+- Bad timeouts (`0`, negative, `NaN`, `inf`, `true`, `"soon"`) are refused
+  before agy starts, instead of an instant kill or a timer that never fires.
+  The CLI exits `2`. A bad `AGY_BRIDGE_*TIMEOUT` env value warns and falls back
+  instead of crashing the MCP server at import.
+- `agy_ask` refuses a missing or non-string `prompt` with a tool error.
+
+### Added
+- **Output cap, so one long agy run cannot flood the caller's context.** The MCP
+  tools take `brief` (default `true`: agy is asked to end with a `SUMMARY:`
+  block) and `max_chars` (default `AGY_BRIDGE_MAX_CHARS` or 4000; `0` = off).
+  Past the cap the result is that summary, or the reply's tail, plus the path of
+  a temp file holding the full text. Timeout and error output is capped too; the
+  bridge's own notes never are. CLI: `--brief`, `--max-chars N` (off by default,
+  so scripts see no change). Library: `cap_output()`, `BRIEF_INSTRUCTION`.
+
 ## [1.3.0] — 2026-09-25
 
 ### Changed

@@ -226,8 +226,8 @@ except AgyNotFoundError:
     print("install agy first")
 ```
 
-`run(prompt, timeout=900, agy_path=None, *, add_dirs=None, model=None,
-idle_timeout=120, extra_args=None, skip_permissions=False) -> str` raises:
+`run(prompt, timeout=None, agy_path=None, *, add_dirs=None, model=None,
+idle_timeout=None, extra_args=None, skip_permissions=False) -> str` raises:
 
 - `AgyNotFoundError` if the binary is missing.
 - `AgyTimeoutError`, carrying `.partial`, on the idle or hard timeout.
@@ -235,12 +235,21 @@ idle_timeout=120, extra_args=None, skip_permissions=False) -> str` raises:
   exits non-zero with a quota or rate-limit message.
 - `AgyExitError`, carrying `.returncode` and `.output`, on any other non-zero
   exit, such as an unknown `--model`.
-- `ValueError` on an empty prompt.
+- `ValueError` on an empty prompt, or a timeout that is not a finite number
+  >= 1 (checked before agy starts).
 
 It returns `""` only if agy genuinely emitted nothing. `add_dirs` → agy
-`--add-dir`; `model` → `--model`. The `timeout` is the absolute ceiling;
-`idle_timeout` ends a run that has gone silent for that many seconds (so a
-long-but-active task survives the ceiling).
+`--add-dir`; `model` → `--model`. The `timeout` is the absolute ceiling
+(default 900 s); `idle_timeout` ends a run that has gone silent for that many
+seconds (default 300 s). `agy -p` prints nothing until its answer is ready, so
+**when you pass `timeout` and no `idle_timeout`, the idle bound becomes
+`timeout`**: a longer budget would be useless if the idle timer still fired at
+300 s.
+
+`cap_output(text, max_chars)` keeps a long reply out of a calling model's
+context: past `max_chars` it returns the reply's last `SUMMARY:` block (or its
+tail) plus the path of a temp file holding the full text. Append
+`BRIEF_INSTRUCTION` to the prompt to make agy end with that block.
 
 `skip_permissions=True` passes `--dangerously-skip-permissions`. Headless agy
 cannot answer tool-approval prompts, so without it agy **silently declines every
@@ -266,6 +275,10 @@ agy-bridge --no-workspace "Explain idle timeouts in process supervision"
 # Add more dirs, pick a model, widen the limits for a big task:
 agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
     --timeout 1800 --idle-timeout 180 "Refactor X to match the shared lib"
+
+# Long reply, short printout: agy ends with a SUMMARY: block, and only that is
+# printed when the reply passes 4000 chars (full text saved to a temp file):
+agy-bridge --no-workspace --brief --max-chars 4000 --timeout 840 "Research X"
 ```
 
 | Flag | Default | Meaning |
@@ -274,12 +287,14 @@ agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
 | `--no-workspace` | off | Don't auto-add cwd (use for research / Q&A). |
 | `--model NAME` | agy default | agy `--model`. |
 | `--timeout SECS` | `900` | Hard ceiling (absolute wall). |
-| `--idle-timeout SECS` | `120` | Kill after this many seconds of no output. |
+| `--idle-timeout SECS` | `300`, or `--timeout` when given | Kill after this many seconds of no output. |
+| `--brief` | off | Ask agy to end with a `SUMMARY:` block. |
+| `--max-chars N` | `0` (no cap) | Print at most N chars: the `SUMMARY:` block (or the tail) and the path of the full text. |
 | `--skip-permissions` | off | Let agy edit files / run commands unattended (`--dangerously-skip-permissions`). |
 
 **Exit codes:** `0` success · agy's own code when agy fails (its message is
 printed) · `75` quota / rate limit spent (retry later) · `1` timeout or no
-output · `127` agy not found.
+output · `2` bad `--timeout` / `--idle-timeout` · `127` agy not found.
 
 ### MCP server
 
@@ -318,9 +333,12 @@ every call through the pty bridge.
 | `agy_ask` | `workspace` | `"auto"`\|`"none"` | | `auto` (default) adds the server's cwd so agy sees the repo; `none` for research / Q&A |
 | `agy_ask` | `add_dir` | string[] | | explicit dirs for agy's workspace (overrides the `workspace` default) |
 | `agy_ask` | `model` | string | | agy `--model` |
-| `agy_ask` | `timeout` | number | | hard timeout override, seconds |
+| `agy_ask` | `timeout` | number | | hard timeout override, seconds; also lifts the idle bound to match |
+| `agy_ask`, `agy_research` | `brief` | boolean | | default `true`: agy ends with a `SUMMARY:` block, returned alone when the reply is long |
+| `agy_ask`, `agy_research` | `max_chars` | integer | | cap on returned text (default `AGY_BRIDGE_MAX_CHARS` or 4000; `0` = no cap); past it the full reply is saved to a file named in the result |
 | `agy_ask` | `skip_permissions` | boolean | | let agy edit files / run commands unattended. **Refused unless the server was started with `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`**, because the caller is itself a model |
 | `agy_research` | `query` | string | ✅ | wrapped as a deep-research prompt for agy (never attaches a workspace) |
+| `agy_research` | `model`, `timeout` | string, number | | as for `agy_ask`; `timeout` defaults to the 900 s ceiling and is also the idle bound, since research is silent for minutes |
 
 **Response shape** — a standard MCP `tools/call` result; the answer is the text
 content:
@@ -408,7 +426,8 @@ echo "$ANSWER"
 |---|---|---|
 | `AGY_PATH` | auto-detect | Absolute path to the `agy` binary |
 | `AGY_BRIDGE_TIMEOUT` | `900` | Hard ceiling (absolute wall), in seconds |
-| `AGY_BRIDGE_IDLE_TIMEOUT` | `120` | Kill after this many seconds of no output from agy |
+| `AGY_BRIDGE_IDLE_TIMEOUT` | `300` | Kill after this many seconds of no output from agy (a caller's `timeout` overrides it) |
+| `AGY_BRIDGE_MAX_CHARS` | `4000` | MCP server: cap on returned text; `0` = no cap |
 | `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS` | unset | Set to `1` on the MCP server to allow the `skip_permissions` tool argument |
 
 ---
@@ -463,11 +482,12 @@ not the bridge. Re-authenticate (`agy` interactively) or check
 
 **`AgyTimeoutError`** — agy hit a limit. Two triggers: the **hard ceiling**
 (`AGY_BRIDGE_TIMEOUT`, default 900s) and the **idle timeout**
-(`AGY_BRIDGE_IDLE_TIMEOUT`, default 120s — fires when agy emits nothing for that
-long). The error carries `.partial` (whatever agy produced first), and the CLI
+(`AGY_BRIDGE_IDLE_TIMEOUT`, default 300s — fires when agy emits nothing for that
+long; a caller's own `timeout` replaces it, because `agy -p` stays silent until
+it answers). The error carries `.partial` (whatever agy produced first), and the CLI
 prints it before exiting. Widen the limits for long prompts:
-`AGY_BRIDGE_TIMEOUT=1800 agy-bridge "..."`, `--idle-timeout 300`, or
-`run(prompt, timeout=1800, idle_timeout=300)`. To continue a run that timed out,
+`AGY_BRIDGE_TIMEOUT=1800 agy-bridge "..."`, `--timeout 1800`, or
+`run(prompt, timeout=1800)`. To continue a run that timed out,
 resume the agy session directly with `agy -c`.
 
 **agy stalls until the idle timeout, then times out on what looks like a

@@ -43,7 +43,9 @@ from .bridge import (
     AgyNotFoundError,
     AgyQuotaError,
     AgyTimeoutError,
-    DEFAULT_IDLE_TIMEOUT,
+    BRIEF_INSTRUCTION,
+    DEFAULT_TIMEOUT,
+    cap_output,
     force_utf8_stdio,
     resolve_add_dirs,
     run,
@@ -55,6 +57,26 @@ from .bridge import (
 SKIP_PERMISSIONS_ENV = "AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS"
 
 PROTOCOL_VERSION = "2024-11-05"
+
+# Replies longer than this come back as their SUMMARY block (or tail) plus the
+# path of a file holding the full text, so one long agy run cannot flood the
+# calling model's context. 0 = no cap.
+MAX_CHARS_ENV = "AGY_BRIDGE_MAX_CHARS"
+DEFAULT_MAX_CHARS = 4000
+
+_CAP_PROPS = {
+    "brief": {
+        "type": "boolean",
+        "description": "default true: ask agy to end with a short SUMMARY: "
+                       "block, returned alone when the reply is long.",
+    },
+    "max_chars": {
+        "type": "integer",
+        "description": "cap on returned text (default "
+                       f"${MAX_CHARS_ENV} or {DEFAULT_MAX_CHARS}; 0 = no cap). "
+                       "Past it the full reply is saved to a file named in the result.",
+    },
+}
 
 TOOLS = [
     {
@@ -88,6 +110,7 @@ TOOLS = [
                     "description": "Hard timeout in seconds (override when a task "
                                    "legitimately needs longer).",
                 },
+                **_CAP_PROPS,
                 "skip_permissions": {
                     "type": "boolean",
                     "description": "Let agy edit files / run commands without "
@@ -105,7 +128,15 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Research query or topic"}
+                "query": {"type": "string", "description": "Research query or topic"},
+                "model": {"type": "string", "description": "agy --model (optional)"},
+                "timeout": {
+                    "type": "number",
+                    "description": f"seconds (default {int(DEFAULT_TIMEOUT)}); "
+                                   "agy is silent until done, so this is also "
+                                   "the idle bound",
+                },
+                **_CAP_PROPS,
             },
             "required": ["query"],
         },
@@ -122,36 +153,54 @@ def _with_output(output: str, note: str) -> str:
     return f"{output}\n\n{note}" if output else note
 
 
+def _max_chars(value) -> int:
+    """The output cap from the tool argument, else the env var, else default."""
+    if value is None:
+        value = os.environ.get(MAX_CHARS_ENV, DEFAULT_MAX_CHARS)
+    if isinstance(value, bool):
+        raise ValueError(f"max_chars must be an integer >= 0, got {value!r}")
+    try:
+        cap = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"max_chars must be an integer >= 0, got {value!r}") from None
+    if cap < 0:
+        raise ValueError(f"max_chars must be an integer >= 0, got {value!r}")
+    return cap
+
+
 def _call_agy(
     prompt: str,
     add_dirs: list | None = None,
     model: str | None = None,
     timeout: float | None = None,
     skip_permissions: bool = False,
+    max_chars: int = 0,
 ) -> tuple[str, bool]:
-    """Run agy; return (text, is_error) for an MCP tool result."""
+    """Run agy; return (text, is_error) for an MCP tool result. agy's text is
+    cut to `max_chars` (see cap_output); the bridge's own notes never are."""
     kwargs: dict = {
         "add_dirs": add_dirs, "model": model, "skip_permissions": skip_permissions,
     }
     if timeout is not None:
-        kwargs["timeout"] = timeout
-        # `agy -p` prints nothing until its answer is ready, so a caller's longer
-        # budget must lift the idle bound too, or it still dies at the default.
-        kwargs["idle_timeout"] = max(timeout, DEFAULT_IDLE_TIMEOUT)
+        kwargs["timeout"] = timeout  # run() lifts the idle bound to match
     try:
-        out = run(prompt, **kwargs)
+        out = cap_output(run(prompt, **kwargs), max_chars)
     except AgyNotFoundError as exc:
         return f"[agy-mcp] ERROR: {exc}", True
     except AgyTimeoutError as exc:
         # Surface partial work so the caller isn't left empty-handed; it can
         # resume the agy session with `agy -c`.
         note = f"[agy-mcp] TIMEOUT: {exc}; resume with 'agy -c'"
-        return _with_output(exc.partial, note), True
+        return _with_output(cap_output(exc.partial, max_chars), note), True
     except AgyQuotaError as exc:
         when = f"; resets in ~{exc.reset_seconds}s" if exc.reset_seconds else ""
-        return _with_output(exc.output, f"[agy-mcp] QUOTA: {exc}{when}"), True
+        note = f"[agy-mcp] QUOTA: {exc}{when}"
+        return _with_output(cap_output(exc.output, max_chars), note), True
     except AgyExitError as exc:
-        return _with_output(exc.output, f"[agy-mcp] ERROR: {exc}"), True
+        note = f"[agy-mcp] ERROR: {exc}"
+        return _with_output(cap_output(exc.output, max_chars), note), True
+    except ValueError as exc:  # bad timeout / prompt, caught before agy spawns
+        return f"[agy-mcp] ERROR: {exc}", True
     except Exception as exc:  # pragma: no cover - defensive
         return f"[agy-mcp] ERROR: {exc}", True
     if not out:
@@ -199,6 +248,12 @@ def handle_request(req: dict) -> dict | None:
     if method == "tools/call":
         name = params.get("name", "")
         args = params.get("arguments", {}) or {}
+        if name in ("agy_ask", "agy_research"):
+            try:
+                max_chars = _max_chars(args.get("max_chars"))
+            except ValueError as exc:
+                return _tool_error(req_id, f"[agy-mcp] ERROR: {exc}")
+            brief = BRIEF_INSTRUCTION if args.get("brief", True) is not False else ""
         if name == "agy_ask":
             # Coding-shaped by default: inject cwd unless caller opts out
             # (workspace="none") or names dirs explicitly.
@@ -213,19 +268,30 @@ def handle_request(req: dict) -> dict | None:
                 args.get("add_dir"),
                 use_cwd_default=args.get("workspace", "auto") != "none",
             )
+            prompt = args.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                return _tool_error(req_id, "[agy-mcp] ERROR: 'prompt' must be a non-empty string")
             result, is_error = _call_agy(
-                args.get("prompt", ""),
+                prompt + brief,
                 add_dirs=add_dirs,
                 model=args.get("model"),
                 timeout=args.get("timeout"),
                 skip_permissions=skip,
+                max_chars=max_chars,
             )
         elif name == "agy_research":
             query = args.get("query")
             if not isinstance(query, str) or not query.strip():
                 return _tool_error(req_id, "[agy-mcp] ERROR: 'query' must be a non-empty string")
             # Research never needs the repo — no workspace, keeps agy's context lean.
-            result, is_error = _call_agy(f"Do deep research on: {query}")
+            # An explicit timeout (default the hard wall) also lifts the idle
+            # bound: research is silent for minutes before its answer.
+            result, is_error = _call_agy(
+                f"Do deep research on: {query}{brief}",
+                model=args.get("model"),
+                timeout=args.get("timeout", DEFAULT_TIMEOUT),
+                max_chars=max_chars,
+            )
         else:
             return {
                 "jsonrpc": "2.0",

@@ -33,18 +33,49 @@ Public API
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
+
+
+def check_seconds(value, name: str = "timeout") -> float:
+    """A timeout as a finite float >= 1 s. Accepts numeric strings (some MCP
+    clients send "600"); rejects bool, NaN/inf, zero and negatives, which used
+    to turn into an instant kill or a never-firing timer."""
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a number of seconds, got {value!r}")
+    try:
+        secs = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number of seconds, got {value!r}") from None
+    if not math.isfinite(secs) or secs < 1:
+        raise ValueError(f"{name} must be a finite number >= 1, got {value!r}")
+    return secs
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """Read a timeout env var; a bad value warns and falls back instead of
+    crashing the import (and with it the whole MCP server) at startup."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return check_seconds(raw, name)
+    except ValueError as exc:
+        sys.stderr.write(f"[agy-bridge] ignoring {exc}; using {default:.0f}\n")
+        return default
+
 
 # Hard ceiling (absolute wall). A real coding task — file edits + a test run —
 # can run many minutes; this is only the backstop, not the normal stop signal.
 # The idle timer below is what actually ends a *stalled* run. Override with
 # $AGY_BRIDGE_TIMEOUT.
-DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "900"))
+DEFAULT_TIMEOUT = _env_seconds("AGY_BRIDGE_TIMEOUT", 900.0)
 
 # Idle (inactivity) timeout: kill only after agy has emitted NOTHING for this
 # many seconds. Reset on every chunk read, so a task that keeps streaming output
@@ -53,7 +84,9 @@ DEFAULT_TIMEOUT = float(os.environ.get("AGY_BRIDGE_TIMEOUT", "900"))
 # poll. Override with $AGY_BRIDGE_IDLE_TIMEOUT.
 # 300, not 120: `agy -p` is silent while it thinks, and a gemini-3.8-flash web
 # research answer took 218 s with no output in between (measured 25 Oct 2026).
-DEFAULT_IDLE_TIMEOUT = float(os.environ.get("AGY_BRIDGE_IDLE_TIMEOUT", "300"))
+# A caller that passes its own `timeout` (and no idle bound) gets idle = timeout,
+# see run(): a longer budget is useless if the idle timer still fires first.
+DEFAULT_IDLE_TIMEOUT = _env_seconds("AGY_BRIDGE_IDLE_TIMEOUT", 300.0)
 
 # CLI exit status when agy's quota is spent (EX_TEMPFAIL: retry later), so a
 # caller script can tell "wait / rotate account" apart from a real failure.
@@ -480,15 +513,61 @@ def build_argv(
     return argv
 
 
+# --- output cap: keep a caller model's context small -------------------------
+
+# Appended to the prompt by `brief=True` callers, so the answer ends in a block
+# cap_output() can return alone when the full reply is long.
+BRIEF_INSTRUCTION = (
+    "\n\nEnd your reply with a line that says exactly 'SUMMARY:' followed by at "
+    "most 10 short lines. State the findings or answer themselves (the facts, "
+    "numbers, names; not a description of your work), then files changed and "
+    "anything left open. Put nothing after the summary."
+)
+
+# Last line that starts the summary block ("SUMMARY:", "## Summary", "**SUMMARY**").
+_SUMMARY_RE = re.compile(r"(?im)^[ \t#*>_]*summary[*_]*[ \t]*(?::|$)")
+
+
+def _save_full(text: str) -> str:
+    """Write the full reply to a temp file; return its path."""
+    folder = os.path.join(tempfile.gettempdir(), "agy-bridge")
+    os.makedirs(folder, exist_ok=True)
+    fd, path = tempfile.mkstemp(
+        prefix=time.strftime("agy-%Y%m%d-%H%M%S-"), suffix=".txt", dir=folder
+    )
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    return path
+
+
+def cap_output(text: str, max_chars: int) -> str:
+    """Return `text` whole when it fits in `max_chars` (0 = no cap). Otherwise
+    return its last SUMMARY block, or failing that its tail (the answer comes
+    last), cut to `max_chars`, plus a note naming the file with the full text."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    hits = list(_SUMMARY_RE.finditer(text))
+    kept = text[hits[-1].start():].strip() if hits else ""
+    how = "summary only"
+    if not kept or len(kept) > max_chars:
+        kept = text[-max_chars:]
+        how = f"last {max_chars} chars"
+    try:
+        where = f"full text: {_save_full(text)}"
+    except OSError as exc:
+        where = f"full text not saved ({exc})"
+    return f"{kept}\n\n[agy-bridge] reply was {len(text)} chars; showing {how}; {where}"
+
+
 def run(
     prompt: str,
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | None = None,
     agy_path: str | None = None,
     *,
     add_dirs: list[str] | None = None,
     model: str | None = None,
     extra_args: list[str] | None = None,
-    idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    idle_timeout: float | None = None,
     skip_permissions: bool = False,
 ) -> str:
     """
@@ -497,9 +576,11 @@ def run(
     `add_dirs` are passed as `--add-dir` so agy operates on the caller's repo
     (essential for coding delegation). `model` maps to `--model`.
 
-    `timeout` is the hard wall (absolute ceiling); `idle_timeout` ends a run that
-    has gone silent. A long-but-active task survives the wall; a stalled one dies
-    at the idle bound.
+    `timeout` is the hard wall (absolute ceiling, default DEFAULT_TIMEOUT);
+    `idle_timeout` ends a run that has gone silent. Left unset, the idle bound is
+    DEFAULT_IDLE_TIMEOUT, or `timeout` itself when the caller set one: `agy -p`
+    prints nothing until its answer is ready, so a caller's longer budget must
+    not still die at the default idle bound. Both must be finite and >= 1 s.
 
     `skip_permissions` passes `--dangerously-skip-permissions`, which headless
     agy needs to actually edit files or run commands (it cannot answer approval
@@ -510,8 +591,13 @@ def run(
     quota is spent, AgyExitError (with `.returncode`, `.output`) on any other
     non-zero exit. Returns "" if agy genuinely emitted nothing.
     """
-    if not prompt or not prompt.strip():
+    if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
+    hard = DEFAULT_TIMEOUT if timeout is None else check_seconds(timeout)
+    if idle_timeout is not None:
+        idle = check_seconds(idle_timeout, "idle_timeout")
+    else:
+        idle = DEFAULT_IDLE_TIMEOUT if timeout is None else hard
 
     path = agy_path or find_agy()
     if not path:
@@ -522,10 +608,10 @@ def run(
 
     argv = build_argv(
         path, prompt, add_dirs=add_dirs, model=model,
-        timeout=timeout, extra_args=extra_args,
+        timeout=hard, extra_args=extra_args,
         skip_permissions=skip_permissions,
     )
-    return _pty_run(argv, timeout, idle_timeout)
+    return _pty_run(argv, hard, idle)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -545,14 +631,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--model", default=None, help="agy --model to use")
     parser.add_argument(
-        "--timeout", type=float, default=DEFAULT_TIMEOUT,
+        "--timeout", type=float, default=None,
         help=f"hard timeout (absolute ceiling) in seconds "
              f"(default {int(DEFAULT_TIMEOUT)})",
     )
     parser.add_argument(
-        "--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT,
-        help=f"kill agy after this many seconds of no output "
-             f"(default {int(DEFAULT_IDLE_TIMEOUT)})",
+        "--idle-timeout", type=float, default=None,
+        help=f"kill agy after this many seconds of no output (default "
+             f"{int(DEFAULT_IDLE_TIMEOUT)}, or --timeout when that is given)",
+    )
+    parser.add_argument(
+        "--brief", action="store_true",
+        help="ask agy to end with a SUMMARY: block; with --max-chars, print "
+             "only that block when the reply is long",
+    )
+    parser.add_argument(
+        "--max-chars", type=int, default=0, metavar="N",
+        help="cap printed output at N chars; the full reply goes to a temp "
+             "file named on the last line (default 0 = no cap)",
     )
     parser.add_argument(
         "--no-workspace", action="store_true",
@@ -566,6 +662,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     prompt = " ".join(args.prompt)
+    if args.brief:
+        prompt += BRIEF_INSTRUCTION
     # Coding-shaped by default: inject cwd unless explicitly opted out or the
     # caller already named dirs. resolve_add_dirs keeps the policy in one place.
     add_dirs = resolve_add_dirs(args.add_dir, use_cwd_default=not args.no_workspace)
@@ -578,9 +676,12 @@ def main(argv: list[str] | None = None) -> int:
     except AgyNotFoundError as exc:
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 127
+    except ValueError as exc:  # bad --timeout / --idle-timeout
+        sys.stderr.write(f"[agy-bridge] {exc}\n")
+        return 2
     except AgyExitError as exc:
         if exc.output:
-            print(exc.output)
+            print(cap_output(exc.output, args.max_chars))
         if isinstance(exc, AgyQuotaError):
             when = f"; resets in ~{exc.reset_seconds}s" if exc.reset_seconds else ""
             sys.stderr.write(f"[agy-bridge] {exc}{when}\n")
@@ -591,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
         return exc.returncode if 0 < exc.returncode < 256 else 1
     except AgyTimeoutError as exc:
         if exc.partial:
-            print(exc.partial)  # surface partial work instead of dropping it
+            print(cap_output(exc.partial, args.max_chars))  # keep partial work
             note = "partial output above"
         else:
             # Common on Windows: ConPTY batches output and flushes nothing
@@ -606,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     if not output:
         sys.stderr.write("[agy-bridge] no output captured from agy\n")
         return 1
-    print(output)
+    print(cap_output(output, args.max_chars))
     return 0
 
 
