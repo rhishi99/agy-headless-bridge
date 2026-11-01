@@ -1,13 +1,10 @@
 name: tests
 
+# Manual-only (01 Nov 2026): GitHub free minutes are shared across all private repos.
+# Run tests locally (in parallel) before pushing; dispatch this by hand when CI is really needed.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
-# Cancel superseded runs on the same ref so a rapid push/PR series doesn't
-# stack up jobs (also trims minutes).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
