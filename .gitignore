@@ -11,3 +11,6 @@ venv/
 *.log
 *.stackdump
 .tmp/
+
+# Local-only Obsidian vault (owner notes, not shipped)
+obsidian-memory/
