@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version as _version
 
 from .bridge import (
+    AgyResult,
     AgyExitError,
     AgyNotFoundError,
     AgyQuotaError,
@@ -11,6 +12,7 @@ from .bridge import (
     find_agy,
     resolve_add_dirs,
     run,
+    run_result,
 )
 
 try:
@@ -20,6 +22,8 @@ except PackageNotFoundError:  # running from source without an install
 
 __all__ = [
     "run",
+    "run_result",
+    "AgyResult",
     "find_agy",
     "clean",
     "resolve_add_dirs",

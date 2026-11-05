@@ -226,8 +226,15 @@ except AgyNotFoundError:
     print("install agy first")
 ```
 
+`run_result()` takes the same arguments and returns an `AgyResult` with
+`.text`, `.conversation_id` (pass back as `conversation=` to resume), `.usage`
+(token counts) and `.denied` (file writes agy was refused, which it does with
+exit 0). Those extras need agy ≥ 1.2.11 (direct mode); on the pty path only
+`.text` and `.denied` are filled.
+
 `run(prompt, timeout=None, agy_path=None, *, add_dirs=None, model=None,
-idle_timeout=None, extra_args=None, skip_permissions=False) -> str` raises:
+idle_timeout=None, extra_args=None, skip_permissions=False, mode=None,
+effort=None, conversation=None, heartbeat=False) -> str` raises:
 
 - `AgyNotFoundError` if the binary is missing.
 - `AgyTimeoutError`, carrying `.partial`, on the idle or hard timeout.
@@ -291,6 +298,10 @@ agy-bridge --no-workspace --brief --max-chars 4000 --timeout 840 "Research X"
 | `--brief` | off | Ask agy to end with a `SUMMARY:` block. |
 | `--max-chars N` | `0` (no cap) | Print at most N chars: the `SUMMARY:` block (or the tail) and the path of the full text. |
 | `--skip-permissions` | off | Let agy edit files / run commands unattended (`--dangerously-skip-permissions`). |
+| `--mode MODE` | agy default | agy `--mode`: `plan` (read-only), `accept-edits`, `auto`. |
+| `--effort LEVEL` | agy default | agy `--effort`: `low` … `max`. |
+| `--conversation ID` | — | Continue an earlier run; each run prints `conversation <id>` on stderr. |
+| `--heartbeat` | off | agy logs each step to a progress file; idle timeout watches it, so a long `--timeout` no longer hides a stall. |
 
 **Exit codes:** `0` success · agy's own code when agy fails (its message is
 printed) · `75` quota / rate limit spent (retry later) · `1` timeout or no
@@ -323,7 +334,8 @@ claude mcp add --transport stdio antigravity -- \
 </details>
 
 The server speaks JSON-RPC stdio directly (no MCP SDK dependency) and routes
-every call through the pty bridge.
+every call through the bridge: plain pipes plus `--output-format json` on agy ≥
+1.2.11, a fresh pty on older agy (force with `AGY_BRIDGE_MODE=direct|pty`).
 
 **Tool schema** (what an agent — or you, integrating manually — sees):
 
@@ -337,6 +349,10 @@ every call through the pty bridge.
 | `agy_ask`, `agy_research` | `brief` | boolean | | default `true`: agy ends with a `SUMMARY:` block, returned alone when the reply is long |
 | `agy_ask`, `agy_research` | `max_chars` | integer | | cap on returned text (default `AGY_BRIDGE_MAX_CHARS` or 4000; `0` = no cap); past it the full reply is saved to a file named in the result |
 | `agy_ask` | `skip_permissions` | boolean | | let agy edit files / run commands unattended. **Refused unless the server was started with `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`**, because the caller is itself a model |
+| `agy_ask` | `mode` | `"plan"`\|`"accept-edits"`\|`"auto"` | | agy `--mode`; `plan` is read-only and may return a plan instead of doing the task. Anything but `plan` is refused unless the server has `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`, since those modes approve edits |
+| `agy_ask` | `heartbeat` | boolean | | long task: agy logs each step to a progress file the bridge watches, so a stall dies in ~300 s while a working run lives to `timeout` |
+| `agy_ask`, `agy_research` | `effort` | `"low"`…`"max"` | | agy `--effort` |
+| `agy_ask`, `agy_research` | `conversation` | string | | resume an earlier agy conversation; each result ends with `conversation <id>` to pass here |
 | `agy_research` | `query` | string | ✅ | wrapped as a deep-research prompt for agy (never attaches a workspace) |
 | `agy_research` | `model`, `timeout` | string, number | | as for `agy_ask`; `timeout` defaults to the 900 s ceiling and is also the idle bound, since research is silent for minutes |
 
