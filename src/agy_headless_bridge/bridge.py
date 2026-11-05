@@ -25,22 +25,35 @@ ANSI / TUI control noise, and return the clean model response.
               own a tty — so this works from any subprocess.
   * POSIX   : the stdlib `pty` module (`os.openpty` + `subprocess.Popen`).
 
+DIRECT MODE (agy >= 1.2.11)
+---------------------------
+Newer agy prints to a pipe, so no pty is needed. When `agy --version` reports
+>= MIN_DIRECT_VERSION the bridge spawns agy with plain pipes and
+`--output-format json`, which yields the reply plus status, error text, token
+usage and a conversation id for resuming. Older agy keeps the pty path. Force
+either with $AGY_BRIDGE_MODE=direct|pty.
+
 Public API
 ----------
-    from agy_headless_bridge.bridge import run
+    from agy_headless_bridge.bridge import run, run_result
     text = run("reply with exactly: OK")
+    res = run_result("...")  # .text, .conversation_id, .usage, .denied
 """
 
 from __future__ import annotations
 
+import functools
+import json
 import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass, field
 
 
 def check_seconds(value, name: str = "timeout") -> float:
@@ -101,6 +114,11 @@ PTY_ROWS = 50
 # pty is force-closed, and (after reader EOF) how long to wait for the child's
 # exit status before it reads as unknown.
 _EXIT_DRAIN_SECONDS = 2.0
+
+# First agy that prints to a pipe (upstream bug #76 gone; checked on 1.2.11 and
+# 1.5.0). From here on the bridge skips the pty and asks for JSON output.
+MIN_DIRECT_VERSION = (1, 2, 11)
+MODE_ENV = "AGY_BRIDGE_MODE"  # direct | pty; anything else = by version
 
 # --- ANSI / TUI noise stripping -------------------------------------------
 
@@ -224,7 +242,7 @@ class AgyQuotaError(AgyExitError):
 
 _QUOTA_RE = re.compile(
     r"quota|rate[ _-]?limit|RESOURCE_EXHAUSTED|(?<!\d)429(?!\d)"
-    r"|too many requests",
+    r"|too many requests|exhausted your|usage limit|out of credits",
     re.IGNORECASE,
 )
 # "4 hours", "28 mins", "30s", "4h50m" -> (number, first letter of unit).
@@ -272,11 +290,85 @@ class AgyTimeoutError(TimeoutError):
         self.partial = partial
 
 
-# --- platform pty runners --------------------------------------------------
+# --- runners ---------------------------------------------------------------
+
+
+class _Liveness:
+    """When agy last showed life: output on its stdout, or (heartbeat mode) a
+    change to the progress file it appends to. `agy -p` is silent until its
+    answer is ready, so the file is the only signal a long run is not hung."""
+
+    def __init__(self, progress: str | None = None) -> None:
+        self.progress = progress
+        self.last = time.monotonic()
+        self._sig = self._stat()
+
+    def _stat(self):
+        if not self.progress:
+            return None
+        try:
+            st = os.stat(self.progress)
+        except OSError:
+            return None
+        return st.st_size, st.st_mtime_ns
+
+    def bump(self) -> None:
+        self.last = time.monotonic()
+
+    def idle(self) -> float:
+        sig = self._stat()
+        if sig != self._sig:
+            self._sig = sig
+            self.bump()
+        return time.monotonic() - self.last
+
+
+def _run_direct(
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    progress: str | None = None,
+) -> tuple[str, int | None]:
+    """Spawn agy on plain pipes (agy >= MIN_DIRECT_VERSION). Returns its raw
+    stdout+stderr, not clean()ed: the JSON reply may hold box-drawing glyphs
+    that clean() would strip as TUI chrome."""
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    chunks: list[bytes] = []
+    live = _Liveness(progress)
+
+    def _reader() -> None:
+        for data in iter(lambda: proc.stdout.read1(4096), b""):
+            chunks.append(data)
+            live.bump()
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    text = lambda: b"".join(chunks).decode("utf-8", errors="replace").replace("\r\n", "\n")
+    start = time.monotonic()
+    while True:
+        try:
+            proc.wait(1.0)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if live.idle() > idle_timeout:
+            why = f"agy idle (no output) for {idle_timeout:.0f}s"
+        elif time.monotonic() - start > timeout:
+            why = f"agy exceeded hard timeout {timeout:.0f}s"
+        else:
+            continue
+        proc.kill()
+        t.join(5)
+        raise AgyTimeoutError(why, clean(text()))
+    # Bounded: a grandchild agy spawned can hold the pipe open after agy exits.
+    t.join(_EXIT_DRAIN_SECONDS)
+    return text(), proc.returncode
 
 
 def _run_windows(
-    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    progress: str | None = None,
 ) -> tuple[str, int | None]:
     try:
         from winpty import PtyProcess  # type: ignore
@@ -290,9 +382,9 @@ def _run_windows(
     # best-effort — it holds whatever ConPTY had already flushed, often empty.
     proc = PtyProcess.spawn(argv, dimensions=(PTY_ROWS, PTY_COLS))
     chunks: list[str] = []
-    # A 1-slot mutable timestamp the reader bumps on every chunk; the main loop
-    # polls it to detect a stall without blocking on the read itself.
-    last_activity = [time.monotonic()]
+    # The reader bumps this on every chunk; the main loop polls it to detect a
+    # stall without blocking on the read itself.
+    live = _Liveness(progress)
     done = threading.Event()
 
     def _reader() -> None:
@@ -301,7 +393,7 @@ def _run_windows(
                 data = proc.read(4096)
                 if data:
                     chunks.append(data)
-                    last_activity[0] = time.monotonic()
+                    live.bump()
                 elif not proc.isalive():
                     break
         except EOFError:
@@ -325,7 +417,7 @@ def _run_windows(
             _terminate_windows(proc, t)
             return clean("".join(chunks)), rc
         now = time.monotonic()
-        if now - last_activity[0] > idle_timeout:
+        if live.idle() > idle_timeout:
             _terminate_windows(proc, t)
             raise AgyTimeoutError(
                 f"agy idle (no output) for {idle_timeout:.0f}s", clean("".join(chunks))
@@ -357,11 +449,11 @@ def _terminate_windows(proc, t: threading.Thread) -> None:
 
 
 def _run_posix(
-    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    progress: str | None = None,
 ) -> tuple[str, int | None]:
     import pty
     import select
-    import subprocess
 
     master_fd, slave_fd = pty.openpty()
     # Set a wide window on the pty itself (what tty-aware code queries) and
@@ -391,11 +483,12 @@ def _run_posix(
 
     chunks: list[bytes] = []
     timed_out: AgyTimeoutError | None = None
-    start = last = time.monotonic()
+    start = time.monotonic()
+    live = _Liveness(progress)
     try:
         while True:
             now = time.monotonic()
-            if now - last > idle_timeout:
+            if live.idle() > idle_timeout:
                 proc.kill()
                 timed_out = AgyTimeoutError(
                     f"agy idle (no output) for {idle_timeout:.0f}s", ""
@@ -418,7 +511,7 @@ def _run_posix(
             if not data:
                 break
             chunks.append(data)
-            last = time.monotonic()  # progress resets the idle timer
+            live.bump()  # progress resets the idle timer
     finally:
         try:
             os.close(master_fd)
@@ -440,11 +533,12 @@ def _run_posix(
 
 
 def _pty_run(
-    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+    argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+    progress: str | None = None,
 ) -> str:
     """Spawn argv attached to a fresh pty; return its cleaned stdout.
 
-    Platform-agnostic seam: `run()` calls this with the agy command, and the
+    Platform-agnostic seam: `run_result()` calls this on the pty path, and the
     test suite calls it with a stub command to exercise the real pty machinery
     without needing `agy` installed.
 
@@ -452,8 +546,87 @@ def _pty_run(
     AgyQuotaError / AgyExitError (carrying output) on a non-zero exit.
     """
     runner = _run_windows if sys.platform == "win32" else _run_posix
-    output, returncode = runner(argv, timeout, idle_timeout)
-    return _check_exit(output, returncode)
+    return _check_exit(*runner(argv, timeout, idle_timeout, progress))
+
+
+@functools.lru_cache(maxsize=None)
+def _agy_version(path: str) -> tuple[int, ...]:
+    """agy's version as a tuple, () when unknown. Old agy prints nothing to a
+    pipe (bug #76), which reads as unknown and keeps the pty path."""
+    try:
+        out = subprocess.run(
+            [path, "--version"], capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+    return tuple(int(n) for n in m.groups()) if m else ()
+
+
+def _use_direct(path: str) -> bool:
+    forced = os.environ.get(MODE_ENV, "").strip().lower()
+    if forced in ("direct", "pty"):
+        return forced == "direct"
+    return _agy_version(path) >= MIN_DIRECT_VERSION
+
+
+@dataclass
+class AgyResult:
+    """One agy reply. Only `text` is filled on the pty path; direct mode adds
+    the rest from agy's JSON output."""
+
+    text: str
+    conversation_id: str | None = None  # pass back as conversation= to resume
+    usage: dict | None = None  # input_tokens, output_tokens, thinking_tokens...
+    denied: list[str] = field(default_factory=list)  # file writes agy was refused
+
+
+# agy exits 0 when a permission rule blocks a write; the refusal only shows up
+# in the reply text (live agy 1.4.11) or, on some builds, `denied_actions`.
+_DENIED_RE = re.compile(
+    r"Permission denied for (?:write_file|edit_file|replace)\([^)\n]*\)", re.I
+)
+
+
+def _denials(text: str, actions=None) -> list[str]:
+    found = _DENIED_RE.findall(text)
+    if isinstance(actions, list):
+        found += [a if isinstance(a, str) else json.dumps(a) for a in actions]
+    return list(dict.fromkeys(found))
+
+
+def _parse_json(raw: str) -> dict | None:
+    """The last line of `--output-format json` output that is agy's result."""
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and ("response" in obj or "status" in obj):
+            return obj
+    return None
+
+
+def _finish(raw: str, returncode: int | None) -> AgyResult:
+    """Turn direct-mode output into an AgyResult, or raise on a failed run."""
+    obj = _parse_json(raw)
+    if obj is None:  # agy printed no JSON (e.g. it died before answering)
+        text = _check_exit(clean(raw), returncode)
+        return AgyResult(text, denied=_denials(text))
+    text = str(obj.get("response") or "").rstrip()
+    if returncode or obj.get("status", "SUCCESS") != "SUCCESS":
+        # agy's own error text ("invalid model ...", quota) is the useful part.
+        _check_exit(str(obj.get("error") or text or raw), returncode or 1)
+    return AgyResult(
+        text,
+        conversation_id=obj.get("conversation_id") or None,
+        usage=obj.get("usage") if isinstance(obj.get("usage"), dict) else None,
+        denied=_denials(text, obj.get("denied_actions")),
+    )
 
 
 def resolve_add_dirs(
@@ -484,6 +657,10 @@ def build_argv(
     timeout: float = DEFAULT_TIMEOUT,
     extra_args: list[str] | None = None,
     skip_permissions: bool = False,
+    mode: str | None = None,
+    effort: str | None = None,
+    conversation: str | None = None,
+    output_json: bool = False,
 ) -> list[str]:
     """Assemble the agy argv. Split out so it is testable without spawning.
 
@@ -494,8 +671,12 @@ def build_argv(
     argv = [path]
     for d in add_dirs or []:
         argv += ["--add-dir", d]
-    if model:
-        argv += ["--model", model]
+    for flag, value in (("--model", model), ("--mode", mode),
+                        ("--effort", effort), ("--conversation", conversation)):
+        if value:
+            argv += [flag, value]
+    if output_json:
+        argv += ["--output-format", "json"]
     if skip_permissions:
         # Headless agy can't answer tool-permission prompts: without this it
         # silently declines every file write / command and still exits 0.
@@ -559,7 +740,25 @@ def cap_output(text: str, max_chars: int) -> str:
     return f"{kept}\n\n[agy-bridge] reply was {len(text)} chars; showing {how}; {where}"
 
 
-def run(
+# Appended to the prompt by heartbeat=True: agy logs each step to a file the
+# bridge watches, so a long silent run is told apart from a hung one.
+HEARTBEAT_INSTRUCTION = (
+    "\n\nWhile you work, append one short line to {path} after every step you "
+    "finish (e.g. 'HH:MM done: <what> / next: <what>'). Write the first line "
+    "within 2 minutes. Only append; never overwrite the file. It is how the "
+    "caller knows you are still working."
+)
+
+
+def _tail(path: str | None, n: int = 5) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return "\n".join(f.read().splitlines()[-n:])
+    except (OSError, TypeError):
+        return ""
+
+
+def run_result(
     prompt: str,
     timeout: float | None = None,
     agy_path: str | None = None,
@@ -569,18 +768,29 @@ def run(
     extra_args: list[str] | None = None,
     idle_timeout: float | None = None,
     skip_permissions: bool = False,
-) -> str:
+    mode: str | None = None,
+    effort: str | None = None,
+    conversation: str | None = None,
+    heartbeat: bool = False,
+) -> AgyResult:
     """
-    Run `agy -p <prompt>` through a fresh pty and return its cleaned stdout.
+    Run `agy -p <prompt>` headlessly and return an AgyResult.
 
     `add_dirs` are passed as `--add-dir` so agy operates on the caller's repo
-    (essential for coding delegation). `model` maps to `--model`.
+    (essential for coding delegation). `model`, `mode` (plan | accept-edits |
+    auto), `effort` (low ... max) and `conversation` (resume a conversation by
+    the id a previous result returned) map to the agy flags of the same name.
 
     `timeout` is the hard wall (absolute ceiling, default DEFAULT_TIMEOUT);
     `idle_timeout` ends a run that has gone silent. Left unset, the idle bound is
     DEFAULT_IDLE_TIMEOUT, or `timeout` itself when the caller set one: `agy -p`
     prints nothing until its answer is ready, so a caller's longer budget must
     not still die at the default idle bound. Both must be finite and >= 1 s.
+
+    `heartbeat` asks agy to append a line per step to a temp progress file and
+    counts each change as life, so the idle bound stays DEFAULT_IDLE_TIMEOUT
+    even with a long `timeout`: a stall dies in minutes, a working run lives to
+    the hard wall. On timeout the last progress lines are added to `.partial`.
 
     `skip_permissions` passes `--dangerously-skip-permissions`, which headless
     agy needs to actually edit files or run commands (it cannot answer approval
@@ -589,15 +799,19 @@ def run(
     Raises AgyNotFoundError if `agy` can't be located, AgyTimeoutError (with
     `.partial`) on timeout, AgyQuotaError (with `.reset_seconds`) when the
     quota is spent, AgyExitError (with `.returncode`, `.output`) on any other
-    non-zero exit. Returns "" if agy genuinely emitted nothing.
+    failure. `.text` is "" if agy genuinely emitted nothing.
     """
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
+    if heartbeat and mode == "plan":
+        # Measured on agy 1.5.0: plan mode writes nothing, so the progress file
+        # would stay empty and the short idle bound would kill a healthy run.
+        raise ValueError("heartbeat needs file writes, which plan mode blocks")
     hard = DEFAULT_TIMEOUT if timeout is None else check_seconds(timeout)
     if idle_timeout is not None:
         idle = check_seconds(idle_timeout, "idle_timeout")
     else:
-        idle = DEFAULT_IDLE_TIMEOUT if timeout is None else hard
+        idle = DEFAULT_IDLE_TIMEOUT if timeout is None or heartbeat else hard
 
     path = agy_path or find_agy()
     if not path:
@@ -606,12 +820,42 @@ def run(
             "https://antigravity.google/cli"
         )
 
+    direct = _use_direct(path)
+    folder = progress = None
+    if heartbeat:
+        folder = tempfile.mkdtemp(prefix="agy-heartbeat-")
+        progress = os.path.join(folder, "progress.log")
+        open(progress, "w").close()
+        add_dirs = [*(add_dirs or []), folder]
+        prompt += HEARTBEAT_INSTRUCTION.format(path=progress.replace("\\", "/"))
     argv = build_argv(
         path, prompt, add_dirs=add_dirs, model=model,
         timeout=hard, extra_args=extra_args,
-        skip_permissions=skip_permissions,
+        skip_permissions=skip_permissions, mode=mode, effort=effort,
+        conversation=conversation, output_json=direct,
     )
-    return _pty_run(argv, hard, idle)
+    try:
+        if direct:
+            res = _finish(*_run_direct(argv, hard, idle, progress))
+        else:
+            # progress only when set: keeps the 3-argument seam tests patch.
+            text = _pty_run(argv, hard, idle, **({"progress": progress} if progress else {}))
+            res = AgyResult(text, denied=_denials(text))
+    except AgyTimeoutError as exc:
+        tail = _tail(progress)
+        if tail:
+            exc.partial = f"{exc.partial}\n\n[agy-bridge] last progress:\n{tail}".strip()
+        raise
+    finally:
+        if folder:
+            shutil.rmtree(folder, ignore_errors=True)
+    return res
+
+
+def run(prompt: str, timeout: float | None = None, agy_path: str | None = None,
+        **kwargs) -> str:
+    """run_result(...).text: the reply alone. Same arguments and errors."""
+    return run_result(prompt, timeout, agy_path, **kwargs).text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -621,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
     force_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="agy-bridge",
-        description="Call the Antigravity CLI (agy) headlessly via a pty.",
+        description="Call the Antigravity CLI (agy) headlessly.",
     )
     parser.add_argument("prompt", nargs="+", help="prompt to send to agy")
     parser.add_argument(
@@ -660,6 +904,19 @@ def main(argv: list[str] | None = None) -> int:
         help="pass --dangerously-skip-permissions so agy can edit files / run "
              "commands unattended (headless agy otherwise declines silently)",
     )
+    parser.add_argument("--mode", choices=["plan", "accept-edits", "auto"],
+                        default=None, help="agy --mode (plan = read-only)")
+    parser.add_argument("--effort", default=None,
+                        help="agy --effort: low|medium|high|xhigh|max")
+    parser.add_argument(
+        "--conversation", default=None, metavar="ID",
+        help="resume a conversation by the id a previous run printed",
+    )
+    parser.add_argument(
+        "--heartbeat", action="store_true",
+        help="have agy log each step to a progress file; idle timeout then "
+             "watches that file, so a long --timeout no longer hides a stall",
+    )
     args = parser.parse_args(argv)
     prompt = " ".join(args.prompt)
     if args.brief:
@@ -668,10 +925,12 @@ def main(argv: list[str] | None = None) -> int:
     # caller already named dirs. resolve_add_dirs keeps the policy in one place.
     add_dirs = resolve_add_dirs(args.add_dir, use_cwd_default=not args.no_workspace)
     try:
-        output = run(
+        res = run_result(
             prompt, timeout=args.timeout, idle_timeout=args.idle_timeout,
             add_dirs=add_dirs, model=args.model,
-            skip_permissions=args.skip_permissions,
+            skip_permissions=args.skip_permissions, mode=args.mode,
+            effort=args.effort, conversation=args.conversation,
+            heartbeat=args.heartbeat,
         )
     except AgyNotFoundError as exc:
         sys.stderr.write(f"[agy-bridge] {exc}\n")
@@ -704,11 +963,27 @@ def main(argv: list[str] | None = None) -> int:
     except TimeoutError as exc:  # pragma: no cover - defensive
         sys.stderr.write(f"[agy-bridge] {exc}\n")
         return 1
-    if not output:
+    for note in result_notes(res):
+        sys.stderr.write(f"[agy-bridge] {note}\n")
+    if not res.text:
         sys.stderr.write("[agy-bridge] no output captured from agy\n")
         return 1
-    print(cap_output(output, args.max_chars))
+    print(cap_output(res.text, args.max_chars))
     return 0
+
+
+def result_notes(res: AgyResult) -> list[str]:
+    """Caller-facing notes on a successful run: refused writes, resume id."""
+    notes = []
+    if res.denied:
+        notes.append(
+            "WARNING: agy was refused file writes, so its edits may be missing: "
+            + "; ".join(res.denied[:5])
+        )
+    if res.conversation_id:
+        notes.append(f"conversation {res.conversation_id} (pass as conversation "
+                     "/ --conversation to continue it)")
+    return notes
 
 
 def force_utf8_stdio() -> None:

@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+from conftest import _as_result
 from agy_headless_bridge import bridge, mcp_server
 
 
@@ -194,7 +195,7 @@ def _mcp_call(name, args, monkeypatch, reply="ok"):
             raise reply
         return reply
 
-    monkeypatch.setattr(mcp_server, "run", fake_run)
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(fake_run))
     resp = mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": name, "arguments": args},

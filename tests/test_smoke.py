@@ -13,6 +13,7 @@ import textwrap
 
 import pytest
 
+from conftest import _as_result
 from agy_headless_bridge import bridge
 
 
@@ -97,7 +98,7 @@ def test_build_argv_inner_timeout_always_below_outer(timeout):
 def test_run_forwards_add_dirs_to_pty(monkeypatch):
     captured = {}
     monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
-    monkeypatch.setattr(bridge, "_pty_run", lambda argv, *a, **k: captured.setdefault("argv", argv) or "ok")
+    monkeypatch.setattr(bridge, "_pty_run", lambda argv, *a, **k: captured.update(argv=argv) or "ok")
     bridge.run("hello", add_dirs=["/my/repo"])
     assert "--add-dir" in captured["argv"]
     assert "/my/repo" in captured["argv"]
@@ -162,7 +163,7 @@ def test_cli_no_workspace_suppresses_cwd(monkeypatch):
     monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
     monkeypatch.setattr(
         bridge, "_pty_run",
-        lambda argv, *a, **k: captured.setdefault("argv", argv) or "out",
+        lambda argv, *a, **k: captured.update(argv=argv) or "out",
     )
     bridge.main(["--no-workspace", "what is 2+2"])
     assert "--add-dir" not in captured["argv"]
@@ -173,7 +174,7 @@ def test_cli_defaults_to_cwd_workspace(monkeypatch):
     monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
     monkeypatch.setattr(
         bridge, "_pty_run",
-        lambda argv, *a, **k: captured.setdefault("argv", argv) or "out",
+        lambda argv, *a, **k: captured.update(argv=argv) or "out",
     )
     bridge.main(["list the files"])
     assert "--add-dir" in captured["argv"]
@@ -260,7 +261,7 @@ def _agy_ask(args: dict, monkeypatch) -> dict:
         captured.update(kwargs)
         return "ok"
 
-    monkeypatch.setattr(mcp_server, "run", fake_run)
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(fake_run))
     mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_ask", "arguments": args},
@@ -290,13 +291,13 @@ def test_mcp_agy_research_gets_no_workspace(monkeypatch):
         captured.update(kwargs)
         return "ok"
 
-    monkeypatch.setattr(mcp_server, "run", fake_run)
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(fake_run))
     mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_research", "arguments": {"query": "transformers"}},
     })
     # research must never attach the repo
-    assert captured["add_dirs"] is None or captured["add_dirs"] == []
+    assert not captured.get("add_dirs")
 
 
 def test_mcp_ping_returns_result_not_error():
@@ -317,7 +318,7 @@ def test_mcp_agy_ask_timeout_surfaces_partial(monkeypatch):
     def fake_run(prompt, **kwargs):
         raise bridge.AgyTimeoutError("agy idle for 120s", partial="HALF DONE")
 
-    monkeypatch.setattr(mcp_server, "run", fake_run)
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(fake_run))
     out, is_error = mcp_server._call_agy("do it", add_dirs=[os.getcwd()])
     assert "HALF DONE" in out
     assert "agy -c" in out  # tells caller how to resume
@@ -408,7 +409,7 @@ def test_skip_permissions_flag_reaches_argv(monkeypatch):
     monkeypatch.setattr(bridge, "find_agy", lambda: "agy")
     monkeypatch.setattr(
         bridge, "_pty_run",
-        lambda argv, *a, **k: captured.setdefault("argv", argv) or "out",
+        lambda argv, *a, **k: captured.update(argv=argv) or "out",
     )
     bridge.main(["--skip-permissions", "edit it"])
     assert "--dangerously-skip-permissions" in captured["argv"]
@@ -426,7 +427,7 @@ def test_mcp_tool_failure_sets_is_error(monkeypatch):
     def fake_run(prompt, **kwargs):
         raise bridge.AgyQuotaError("quota hit", 1, "RESOURCE_EXHAUSTED", 120)
 
-    monkeypatch.setattr(mcp_server, "run", fake_run)
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(fake_run))
     resp = mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_ask", "arguments": {"prompt": "x"}},
@@ -436,7 +437,7 @@ def test_mcp_tool_failure_sets_is_error(monkeypatch):
 
 
 def test_mcp_success_has_no_is_error(monkeypatch):
-    monkeypatch.setattr(mcp_server, "run", lambda prompt, **k: "fine")
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(lambda prompt, **k: "fine"))
     resp = mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_ask", "arguments": {"prompt": "x"}},
@@ -445,7 +446,7 @@ def test_mcp_success_has_no_is_error(monkeypatch):
 
 
 def test_mcp_research_rejects_empty_query(monkeypatch):
-    monkeypatch.setattr(mcp_server, "run", lambda *a, **k: pytest.fail("ran agy"))
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(lambda *a, **k: pytest.fail("ran agy")))
     resp = mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_research", "arguments": {"query": "  "}},
@@ -455,7 +456,7 @@ def test_mcp_research_rejects_empty_query(monkeypatch):
 
 def test_mcp_skip_permissions_needs_server_opt_in(monkeypatch):
     monkeypatch.delenv(mcp_server.SKIP_PERMISSIONS_ENV, raising=False)
-    monkeypatch.setattr(mcp_server, "run", lambda *a, **k: pytest.fail("ran agy"))
+    monkeypatch.setattr(mcp_server, "run_result", _as_result(lambda *a, **k: pytest.fail("ran agy")))
     resp = mcp_server.handle_request({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "agy_ask",
