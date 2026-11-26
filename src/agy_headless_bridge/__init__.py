@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError, version as _version
 
 from .bridge import (
     AgyResult,
+    AgyCancelledError,
     AgyExitError,
     AgyNotFoundError,
     AgyQuotaError,
@@ -24,6 +25,7 @@ __all__ = [
     "run",
     "run_result",
     "AgyResult",
+    "AgyCancelledError",
     "find_agy",
     "clean",
     "resolve_add_dirs",

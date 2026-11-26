@@ -1,7 +1,7 @@
 {
   "name": "agy-headless-bridge",
   "version": "1.4.0",
-  "description": "MCP server that runs Google's Antigravity CLI (agy) headlessly inside a pseudo-terminal and returns its cleaned output to Claude Code.",
+  "description": "Run Google's Antigravity CLI headlessly and delegate scoped document summaries or local pytest runs from Claude Code.",
   "author": {
     "name": "rhishi99",
     "url": "https://github.com/rhishi99"
@@ -9,6 +9,7 @@
   "homepage": "https://rhishi99.github.io/agy-headless-bridge/",
   "privacyPolicyUrl": "https://github.com/rhishi99/agy-headless-bridge#as-a-claude-code-plugin",
   "repository": "https://github.com/rhishi99/agy-headless-bridge",
+  "agents": "./.claude/agents/antigravity.md",
   "license": "MIT",
   "keywords": ["antigravity", "agy", "gemini", "mcp", "headless"]
 }

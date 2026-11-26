@@ -106,7 +106,7 @@ def test_use_direct_by_version_and_env(monkeypatch):
 
 
 def test_agy_version_parses_and_survives_missing_binary(tmp_path):
-    real = REAL_AGY_VERSION.__wrapped__  # skip the cache
+    real = REAL_AGY_VERSION
     stub = tmp_path / "v.py"
     stub.write_text("print('agy 1.5.0')")
     if sys.platform == "win32":

@@ -33,11 +33,15 @@ directly so the package stays dependency-light.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__
+from ._guard import add_guard_arguments, guarded_command
 from .bridge import (
     AgyExitError,
     AgyNotFoundError,
@@ -58,6 +62,7 @@ from .bridge import (
 SKIP_PERMISSIONS_ENV = "AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS"
 
 PROTOCOL_VERSION = "2024-11-05"
+STRUCTURED_PROTOCOL_VERSION = "2025-06-18"
 
 # Replies longer than this come back as their SUMMARY block (or tail) plus the
 # path of a file holding the full text, so one long agy run cannot flood the
@@ -248,7 +253,7 @@ def _tool_error(req_id, text: str) -> dict:
     }
 
 
-def handle_request(req: dict) -> dict | None:
+def handle_request(req: dict, *, run_options=None, delegation=None, structured=False) -> dict | None:
     method = req.get("method", "")
     req_id = req.get("id")
     params = req.get("params", {}) or {}
@@ -259,13 +264,15 @@ def handle_request(req: dict) -> dict | None:
         return None
 
     if method == "initialize":
-        # We only speak one protocol version; always report it so the client
-        # can decide whether to proceed.
+        requested = params.get("protocolVersion")
+        protocol = PROTOCOL_VERSION
+        if delegation is not None and requested != PROTOCOL_VERSION:
+            protocol = STRUCTURED_PROTOCOL_VERSION
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": protocol,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "agy-headless-bridge", "version": __version__},
             },
@@ -275,18 +282,25 @@ def handle_request(req: dict) -> dict | None:
         return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS}}
+        tools = TOOLS if delegation is None else [*TOOLS, *delegation.tools]
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}}
 
     if method == "tools/call":
         name = params.get("name", "")
-        args = params.get("arguments", {}) or {}
+        args = params.get("arguments", {})
+        if delegation is not None and any(tool["name"] == name for tool in delegation.tools):
+            result = delegation.call(name, args, run_options or {}, structured)
+            return {"jsonrpc": "2.0", "id": req_id, "result": result}
+        args = args or {}
         if name in ("agy_ask", "agy_research"):
             try:
                 max_chars = _max_chars(args.get("max_chars"))
             except ValueError as exc:
                 return _tool_error(req_id, f"[agy-mcp] ERROR: {exc}")
             brief = BRIEF_INSTRUCTION if args.get("brief", True) is not False else ""
-            session = {k: args.get(k) for k in ("effort", "conversation")}
+            session = {**(run_options or {}), **{
+                k: args.get(k) for k in ("effort", "conversation")
+            }}
         if name == "agy_ask":
             # Coding-shaped by default: inject cwd unless caller opts out
             # (workspace="none") or names dirs explicitly.
@@ -353,7 +367,7 @@ def handle_request(req: dict) -> dict | None:
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     # Force UTF-8 on stdio regardless of the host locale (e.g. cp936/GBK on
     # Chinese Windows, cp1252 on Western). MCP clients serialize JSON-RPC as
     # UTF-8; reading with the locale codec mangles non-ASCII prompts into
@@ -361,21 +375,118 @@ def main() -> int:
     # conversion when agy's argv is built (pyo3 "assertion `left == right`
     # failed").
     force_utf8_stdio()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    parser = argparse.ArgumentParser(description="Serve AGY tools over MCP stdio.")
+    add_guard_arguments(parser)
+    parser.add_argument("--delegation-root", help="Workspace for the opt-in document and test tools")
+    parser.add_argument("--enable-pytest", action="store_true", help="Approve the fixed local pytest recipe")
+    parser.add_argument("--retain-delegation-artifacts", action="store_true", help="Allow temporary session artifacts")
+    parser.add_argument("--enable-full-delegation-output", action="store_true", help="Enable the 8000-character output level")
+    args = parser.parse_args(argv)
+    policy = {}
+    delegation = None
+    if args.allowed_roots is not None or args.deny_patterns is not None:
+        policy = {"allowed_roots": args.allowed_roots, "deny_patterns": args.deny_patterns}
         try:
-            req = json.loads(line)
-            resp = handle_request(req)
-            if resp is not None:
-                _send(resp)
-        except json.JSONDecodeError:
-            _send({"jsonrpc": "2.0", "id": None,
-                   "error": {"code": -32700, "message": "Parse error"}})
-        except Exception as exc:  # pragma: no cover - defensive
-            _send({"jsonrpc": "2.0", "id": None,
-                   "error": {"code": -32603, "message": str(exc)}})
+            guarded_command(**policy)
+        except ValueError as exc:
+            sys.stderr.write(f"[agy-mcp] {exc}\n")
+            return 2
+    if args.delegation_root is not None:
+        from ._delegation import DelegationSession
+
+        if policy:
+            parser.error("--delegation-root cannot be combined with a guarded launch")
+        try:
+            delegation = DelegationSession(args.delegation_root, pytest_enabled=args.enable_pytest,
+                                           retention=args.retain_delegation_artifacts,
+                                           full=args.enable_full_delegation_output)
+        except (OSError, RuntimeError, ValueError):
+            parser.error("--delegation-root must point to an existing directory")
+        if not delegation.root.is_dir():
+            parser.error("--delegation-root must point to an existing directory")
+    elif args.enable_pytest or args.retain_delegation_artifacts or args.enable_full_delegation_output:
+        parser.error("Delegation options require --delegation-root")
+    lock = threading.Lock()
+    pending = {}
+    structured = False
+
+    def send_error(req_id, code, message):
+        _send({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}})
+
+    def run_tool(req, cancel, progress_token, structured):
+        req_id = req["id"]
+
+        def progress(elapsed):
+            with lock:
+                if not cancel.is_set():
+                    _send({
+                        "jsonrpc": "2.0", "method": "notifications/progress",
+                        "params": {"progressToken": progress_token, "progress": elapsed},
+                    })
+
+        try:
+            if not cancel.is_set():
+                response = handle_request(req, run_options={
+                    **policy,
+                    "cancel": cancel, "on_progress": progress if progress_token is not None else None,
+                }, delegation=delegation, structured=structured)
+                with lock:
+                    if not cancel.is_set() and response is not None:
+                        _send(response)
+        except Exception as exc:
+            with lock:
+                if not cancel.is_set():
+                    send_error(req_id, -32603, str(exc))
+        finally:
+            with lock:
+                pending.pop(req_id, None)
+
+    # Keep AGY jobs serialized as before while reading cancellations and pings.
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            for line in sys.stdin:
+                if not line.strip():
+                    continue
+                with lock:
+                    try:
+                        req = json.loads(line)
+                        if not isinstance(req, dict):
+                            send_error(None, -32600, "Invalid request")
+                            continue
+                        req_id = req.get("id")
+                        params = req.get("params") or {}
+                        method = req.get("method")
+                        if "id" not in req and method == "notifications/cancelled":
+                            target = params.get("requestId") if isinstance(params, dict) else None
+                            if type(target) in (str, int) and target in pending:
+                                pending[target].set()
+                        elif "id" in req and method == "tools/call":
+                            if type(req_id) not in (str, int) or req_id in pending:
+                                send_error(req_id, -32600, "Invalid or duplicate request ID")
+                                continue
+                            if len(pending) >= 8:
+                                _send(_tool_error(req_id, "[agy-mcp] AGY request queue is full"))
+                                continue
+                            meta = params.get("_meta") if isinstance(params, dict) else None
+                            token = meta.get("progressToken") if isinstance(meta, dict) else None
+                            cancel = pending[req_id] = threading.Event()
+                            worker.submit(run_tool, req, cancel, token if type(token) in (str, int) else None,
+                                          structured)
+                        else:
+                            response = handle_request(req, delegation=delegation)
+                            if response is not None:
+                                if method == "initialize":
+                                    structured = response["result"]["protocolVersion"] == STRUCTURED_PROTOCOL_VERSION
+                                _send(response)
+                    except json.JSONDecodeError:
+                        send_error(None, -32700, "Parse error")
+                    except Exception as exc:  # pragma: no cover - defensive
+                        send_error(None, -32603, str(exc))
+        except BaseException:
+            with lock:
+                for cancel in pending.values():
+                    cancel.set()
+            raise
     return 0
 
 

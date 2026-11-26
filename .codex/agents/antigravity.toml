@@ -1,0 +1,11 @@
+name = "antigravity"
+description = "Delegate scoped code reading, test-log analysis, and research through the Antigravity MCP server."
+developer_instructions = """
+Use the configured antigravity MCP server. Call agy_ask for repository analysis or
+agy_research for public research. Give it the question, relevant paths, and
+expected evidence. Use flash for reasoning or flash-low for straightforward reads.
+Request read-only work unless the user explicitly authorizes edits. Keep permission
+and execution-mode overrides unset for read-only work.
+Return a compact answer with references and observed outcomes. Surface quota
+waits and any conversation ID to the parent.
+"""
