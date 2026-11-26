@@ -4,8 +4,8 @@ agy_headless_bridge.mcp_server — A minimal MCP stdio server that exposes the
 Google Antigravity CLI (`agy`) as callable tools.
 
 This lets any MCP client (Claude Code, etc.) delegate prompts to `agy`. It runs
-agy through the pty bridge (bridge.run), so it works in non-TTY contexts where a
-plain `agy -p` would silently emit nothing (upstream bug #76).
+agy through bridge.run_result (plain pipes + JSON on agy >= 1.2.11, a fresh pty
+on older agy, where a plain `agy -p` silently emits nothing: upstream bug #76).
 
 Register with Claude Code:
 
@@ -48,7 +48,8 @@ from .bridge import (
     cap_output,
     force_utf8_stdio,
     resolve_add_dirs,
-    run,
+    result_notes,
+    run_result,
 )
 
 # `skip_permissions` lets agy edit files / run commands unattended. The MCP
@@ -75,6 +76,21 @@ _CAP_PROPS = {
         "description": "cap on returned text (default "
                        f"${MAX_CHARS_ENV} or {DEFAULT_MAX_CHARS}; 0 = no cap). "
                        "Past it the full reply is saved to a file named in the result.",
+    },
+}
+
+# Shared by both tools. `mode` is gated in handle_request: accept-edits / auto
+# approve agy's edits, so like skip_permissions they need the human's opt-in.
+_SESSION_PROPS = {
+    "effort": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "xhigh", "max"],
+        "description": "agy --effort (reasoning effort; optional)",
+    },
+    "conversation": {
+        "type": "string",
+        "description": "Resume an earlier agy conversation: pass the id a "
+                       "previous result named ('conversation <id>').",
     },
 }
 
@@ -111,6 +127,22 @@ TOOLS = [
                                    "legitimately needs longer).",
                 },
                 **_CAP_PROPS,
+                **_SESSION_PROPS,
+                "mode": {
+                    "type": "string",
+                    "enum": ["plan", "accept-edits", "auto"],
+                    "description": "agy --mode. plan = read-only, and agy may answer "
+                                   "with a plan instead of doing the task. accept-edits / "
+                                   "auto approve edits, so like skip_permissions "
+                                   f"they need {SKIP_PERMISSIONS_ENV}=1.",
+                },
+                "heartbeat": {
+                    "type": "boolean",
+                    "description": "Long task: agy logs each step to a progress "
+                                   "file and the bridge counts that as life, so "
+                                   "a stall dies in minutes while a working run "
+                                   "lives to the full timeout.",
+                },
                 "skip_permissions": {
                     "type": "boolean",
                     "description": "Let agy edit files / run commands without "
@@ -137,6 +169,7 @@ TOOLS = [
                                    "the idle bound",
                 },
                 **_CAP_PROPS,
+                **_SESSION_PROPS,
             },
             "required": ["query"],
         },
@@ -170,21 +203,17 @@ def _max_chars(value) -> int:
 
 def _call_agy(
     prompt: str,
-    add_dirs: list | None = None,
-    model: str | None = None,
     timeout: float | None = None,
-    skip_permissions: bool = False,
     max_chars: int = 0,
+    **kwargs,
 ) -> tuple[str, bool]:
     """Run agy; return (text, is_error) for an MCP tool result. agy's text is
-    cut to `max_chars` (see cap_output); the bridge's own notes never are."""
-    kwargs: dict = {
-        "add_dirs": add_dirs, "model": model, "skip_permissions": skip_permissions,
-    }
+    cut to `max_chars` (see cap_output); the bridge's own notes never are.
+    Other kwargs go to run_result (add_dirs, model, mode, heartbeat...)."""
     if timeout is not None:
-        kwargs["timeout"] = timeout  # run() lifts the idle bound to match
+        kwargs["timeout"] = timeout  # run_result() lifts the idle bound to match
     try:
-        out = cap_output(run(prompt, **kwargs), max_chars)
+        res = run_result(prompt, **kwargs)
     except AgyNotFoundError as exc:
         return f"[agy-mcp] ERROR: {exc}", True
     except AgyTimeoutError as exc:
@@ -203,8 +232,11 @@ def _call_agy(
         return f"[agy-mcp] ERROR: {exc}", True
     except Exception as exc:  # pragma: no cover - defensive
         return f"[agy-mcp] ERROR: {exc}", True
-    if not out:
+    if not res.text:
         return "[agy-mcp] agy returned no output.", True
+    out = cap_output(res.text, max_chars)
+    for note in result_notes(res):
+        out = _with_output(out, f"[agy-mcp] {note}")
     return out, False
 
 
@@ -254,16 +286,20 @@ def handle_request(req: dict) -> dict | None:
             except ValueError as exc:
                 return _tool_error(req_id, f"[agy-mcp] ERROR: {exc}")
             brief = BRIEF_INSTRUCTION if args.get("brief", True) is not False else ""
+            session = {k: args.get(k) for k in ("effort", "conversation")}
         if name == "agy_ask":
             # Coding-shaped by default: inject cwd unless caller opts out
             # (workspace="none") or names dirs explicitly.
             skip = bool(args.get("skip_permissions"))
-            if skip and os.environ.get(SKIP_PERMISSIONS_ENV) != "1":
-                return _tool_error(
-                    req_id,
-                    "[agy-mcp] ERROR: skip_permissions refused — restart the "
-                    f"server with {SKIP_PERMISSIONS_ENV}=1 to allow it.",
-                )
+            mode = args.get("mode")
+            for asked, what in ((skip, "skip_permissions"),
+                                (mode not in (None, "plan"), f"mode={mode!r}")):
+                if asked and os.environ.get(SKIP_PERMISSIONS_ENV) != "1":
+                    return _tool_error(
+                        req_id,
+                        f"[agy-mcp] ERROR: {what} refused — restart the "
+                        f"server with {SKIP_PERMISSIONS_ENV}=1 to allow it.",
+                    )
             add_dirs = resolve_add_dirs(
                 args.get("add_dir"),
                 use_cwd_default=args.get("workspace", "auto") != "none",
@@ -278,6 +314,9 @@ def handle_request(req: dict) -> dict | None:
                 timeout=args.get("timeout"),
                 skip_permissions=skip,
                 max_chars=max_chars,
+                mode=mode,
+                heartbeat=bool(args.get("heartbeat")),
+                **session,
             )
         elif name == "agy_research":
             query = args.get("query")
@@ -291,6 +330,7 @@ def handle_request(req: dict) -> dict | None:
                 model=args.get("model"),
                 timeout=args.get("timeout", DEFAULT_TIMEOUT),
                 max_chars=max_chars,
+                **session,
             )
         else:
             return {

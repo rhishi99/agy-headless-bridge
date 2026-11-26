@@ -6,7 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.4.0] — 2026-10-25
+## [1.4.0] — 2026-11-05
+
+### Added
+- **Direct mode: no pty on agy ≥ 1.2.11.** Newer agy prints to a pipe (bug #76
+  is gone; checked live on 1.5.0), so the bridge now spawns it on plain pipes
+  with `--output-format json`. Older or unidentifiable agy keeps the pty path.
+  Force either with `AGY_BRIDGE_MODE=direct|pty`.
+- **JSON results.** `run_result()` returns an `AgyResult`: `.text`,
+  `.conversation_id`, `.usage` (token counts) and `.denied`. `run()` still
+  returns the text. A JSON `status` other than `SUCCESS` raises with agy's own
+  error text (e.g. "invalid model selection ...") instead of a bare exit code.
+- **Resume, mode, effort.** `conversation` (`--conversation ID`) continues an
+  earlier run; the CLI and MCP results name the id to pass back. `mode`
+  (`plan` | `accept-edits` | `auto`) and `effort` (`low` … `max`) map to agy's
+  flags. `plan` is read-only, and agy may answer a task with a plan instead of
+  doing it (seen on 1.5.0), so it is never a default. Over MCP, any mode
+  but `plan` needs `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS=1`, like
+  `skip_permissions`, because those modes approve agy's edits.
+- **Heartbeat liveness** (`heartbeat` / `--heartbeat`). agy appends a line per
+  step to a temp progress file, and each change counts as life. The idle bound
+  then stays at 300 s even with a long `timeout`: a stalled run dies in minutes,
+  a working one lives to the hard wall. On timeout the last progress lines are
+  added to the partial output. Refused with `mode="plan"`, which blocks the
+  writes the heartbeat needs.
+- **Refused-write warning.** agy exits `0` when a permission rule blocks a
+  file write; the refusal only appears in its reply (or `denied_actions`). The
+  bridge now flags it: `AgyResult.denied`, plus a warning note in CLI and MCP
+  output.
+- Quota detection also matches "exhausted your", "usage limit" and
+  "out of credits" (still only on a failed run).
 
 ### Fixed
 - **A caller's `timeout` no longer dies at the idle bound.** `agy -p` prints
