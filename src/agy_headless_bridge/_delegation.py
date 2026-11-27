@@ -449,7 +449,8 @@ class DelegationSession:
         evidence = [{"path": item["path"], "locator": item["locator"], "claim": item["claim"][:200]}
                     for item in answer["evidence"][:12]
                     if isinstance(item, dict) and isinstance(item.get("claim"), str) and item["claim"].strip()
-                    and item.get("path") in kinds and isinstance(item.get("locator"), str)
+                    and isinstance(item.get("path"), str) and item["path"] in kinds
+                    and isinstance(item.get("locator"), str)
                     and _LOCATORS[kinds[item["path"]]].fullmatch(item["locator"])]
         gaps = [item[:240] for item in answer["gaps"][:5] if isinstance(item, str) and item.strip()]
         partial = not evidence or len(evidence) != len(answer["evidence"])

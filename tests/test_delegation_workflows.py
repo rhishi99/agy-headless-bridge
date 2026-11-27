@@ -388,7 +388,8 @@ def test_media_keeps_located_claims_and_stages_only_selected_files(agy_catalog, 
 def test_media_drops_unstaged_paths_and_wrong_locator_kinds(agy_catalog, monkeypatch, tmp_path):
     (tmp_path / "clip.mp4").write_bytes(b"x")
     (tmp_path / "shot.png").write_bytes(b"x")
-    evidence = [{"path": "clip.mp4", "locator": "page 2", "claim": "Wrong kind."},
+    evidence = [{"path": ["clip.mp4"], "locator": "00:01", "claim": "Malformed path."},
+                {"path": "clip.mp4", "locator": "page 2", "claim": "Wrong kind."},
                 {"path": "shot.png", "locator": "01:00", "claim": "Wrong kind."},
                 {"path": "secret.mp4", "locator": "00:01", "claim": "Not staged."},
                 {"path": "clip.mp4", "locator": "00:75", "claim": "Bad seconds."},
