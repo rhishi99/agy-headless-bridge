@@ -397,6 +397,9 @@ Start `agy-mcp-server --delegation-root /absolute/workspace` to opt in to
 fixed local test recipe and `--retain-delegation-artifacts` for bounded
 log excerpts. Document summaries use the selected AGY model. Pytest runs
 locally, with model summaries available on request for failures.
+`agy_inspect_media` answers questions about up to four workspace PNG images or MP4
+videos (64 MiB combined). Claims carry an image or timestamp locator. The
+bridge checks the file and locator format.
 Add `--enable-recipe ruff`, `npm-test` or `cargo-test` (repeatable) to approve more fixed `agy_run_tests` recipes.
 Add `--enable-code-search` to register `agy_find_code`, which locates code and returns
 file:line citations the bridge verified against the workspace. AGY can read every

@@ -73,7 +73,7 @@ MAX_CHARS_ENV = "AGY_BRIDGE_MAX_CHARS"
 DEFAULT_MAX_CHARS = 4000
 MAX_PENDING_JOBS = 8
 _SCOPED_READ_TOOLS = {"agy_preflight", "agy_summarize_document", "agy_read_artifact",
-                      "agy_git_diff", "agy_public_research"}
+                      "agy_git_diff", "agy_public_research", "agy_inspect_media"}
 
 _CAP_PROPS = {
     "brief": {
