@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-11-27
+
 ### Fixed
 
 - A slow `agy --version` start under load is reported as a startup timeout
@@ -255,7 +257,8 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.0...v1.5.1
 [1.2.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.1
 [1.2.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.0
 [1.1.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.1.0
