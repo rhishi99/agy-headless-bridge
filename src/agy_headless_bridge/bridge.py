@@ -400,7 +400,7 @@ class _Liveness:
         self.progress = progress
         self.control = control
         self.start = self.last = self.last_tick = time.monotonic()
-        self.last_step = 0.0
+        self.stepped = False
         self._sig = self._stat()
 
     @property
@@ -427,12 +427,12 @@ class _Liveness:
                 if self.control.on_status:
                     # Hosts render the message, not the progress number: put the seconds in it.
                     seconds = f"{int(now - self.start)} s"
-                    message = (f"AGY activity observed, {seconds}" if self.last_step > self.last_tick
+                    message = (f"AGY activity observed, {seconds}" if self.stepped
                                else f"Elapsed {seconds}")
                     self.control.on_status(now - self.start, message)
                 if self.control.on_progress:
                     self.control.on_progress(now - self.start)
-                self.last_tick = now
+                self.last_tick, self.stepped = now, False
         sig = self._stat()
         if sig != self._sig:
             self._sig = sig
@@ -471,7 +471,7 @@ def _stream_results(stdout, live):
         elif event == "step_update" and isinstance(frame.get("step_update"), dict):
             step = frame["step_update"]
             if step.get("state") in ("ACTIVE", "DONE") and step.get("step_type") in ("tool", "agent_response"):
-                live.last_step = time.monotonic()
+                live.stepped = True
     if not received_result:
         yield json.dumps({"status": "ERROR", "error": error or "AGY stream ended without a result."})
 
