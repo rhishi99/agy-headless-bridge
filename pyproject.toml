@@ -25,6 +25,7 @@ dependencies = ["pywinpty>=2.0 ; sys_platform == 'win32'"]
 dev = ["pytest>=7"]
 
 [project.scripts]
+agy-headless-bridge = "agy_headless_bridge.__main__:main"
 agy-bridge = "agy_headless_bridge.bridge:main"
 agy-mcp-server = "agy_headless_bridge.mcp_server:main"
 

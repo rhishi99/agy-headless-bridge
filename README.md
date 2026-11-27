@@ -18,6 +18,10 @@ Codename **PtyGravity** · pty + antiGravity
 
 📖 **[Architecture & docs → rhishi99.github.io/agy-headless-bridge](https://rhishi99.github.io/agy-headless-bridge/)**
 
+**[Delegate documents and tests](docs/DELEGATION.md)** to get verified source quotes
+or observed pytest results in a bounded MCP response. The guide includes registration
+for Claude Code and Codex and two synthetic demos.
+
 </div>
 
 ---
@@ -228,9 +232,9 @@ except AgyNotFoundError:
 
 `run_result()` takes the same arguments and returns an `AgyResult` with
 `.text`, `.conversation_id` (pass back as `conversation=` to resume), `.usage`
-(token counts) and `.denied` (file writes agy was refused, which it does with
-exit 0). Those extras need agy ≥ 1.2.11 (direct mode); on the pty path only
-`.text` and `.denied` are filled.
+(token counts), and `.denied` (refused AGY writes). Schema-constrained direct
+runs also expose `.structured_output` when AGY supplies it. The PTY path
+fills `.text` and `.denied`.
 
 `run(prompt, timeout=None, agy_path=None, *, add_dirs=None, model=None,
 idle_timeout=None, extra_args=None, skip_permissions=False, mode=None,
@@ -280,7 +284,7 @@ agy-bridge "Find and fix the off-by-one in the parser"
 agy-bridge --no-workspace "Explain idle timeouts in process supervision"
 
 # Add more dirs, pick a model, widen the limits for a big task:
-agy-bridge --add-dir ../shared-lib --model gemini-3-pro \
+agy-bridge --add-dir ../shared-lib --model flash \
     --timeout 1800 --idle-timeout 180 "Refactor X to match the shared lib"
 
 # Long reply, short printout: agy ends with a SUMMARY: block, and only that is
@@ -292,7 +296,7 @@ agy-bridge --no-workspace --brief --max-chars 4000 --timeout 840 "Research X"
 |---|---|---|
 | `--add-dir DIR` | cwd (auto) | Add a dir to agy's workspace (repeatable). |
 | `--no-workspace` | off | Don't auto-add cwd (use for research / Q&A). |
-| `--model NAME` | agy default | agy `--model`. |
+| `--model NAME` | agy default | A model ID or a [live alias](#model-aliases). |
 | `--timeout SECS` | `900` | Hard ceiling (absolute wall). |
 | `--idle-timeout SECS` | `300`, or `--timeout` when given | Kill after this many seconds of no output. |
 | `--brief` | off | Ask agy to end with a `SUMMARY:` block. |
@@ -377,6 +381,81 @@ answer:
 - **Anything else:** agy's message (if any), then `[agy-mcp] ERROR: ...`. This
   covers agy missing, a non-zero exit and bad arguments.
 
+Clients that send `params._meta.progressToken` receive
+`notifications/progress` roughly every five seconds. The progress value is
+elapsed seconds. The hard and idle deadlines still apply. Clients can cancel
+with `notifications/cancelled` and the original `requestId`. The server
+stops the local run and drops its reply. On Windows it owns the child tree
+through a Job Object. On POSIX it stops the process group.
+[MCP progress](https://modelcontextprotocol.io/specification/2024-11-05/basic/utilities/progress)
+and [MCP cancellation](https://modelcontextprotocol.io/specification/2024-11-05/basic/utilities/cancellation).
+
+### Scoped document and test delegation
+
+Start `agy-mcp-server --delegation-root /absolute/workspace` to opt in to
+`agy_preflight` and `agy_summarize_document`. Add `--enable-pytest` for the
+fixed local test recipe and `--retain-delegation-artifacts` for bounded
+log excerpts. Document summaries use the selected AGY model. Pytest runs
+locally, with model summaries available on request for failures.
+
+The default response budget is 2,000 characters. See the
+[delegation guide](docs/DELEGATION.md) for client commands, exact options,
+workspace access, and sample results.
+
+### Model aliases
+
+`flash` and `flash-high` select the newest installed-catalog Gemini Flash High.
+Use `flash-low`, `flash-medium`, or `flash-xhigh` for a specific tier.
+`pro` selects the newest Gemini Pro High or untiered Pro. An unavailable alias
+returns an error. Run `agy models` to find a model ID. Model IDs are forwarded
+unchanged, and successful catalog lookups are cached for one hour per process.
+
+### Guarded execution
+
+`agy-bridge` and `agy-mcp-server` accept repeatable `--allowed-roots DIR`
+and `--deny-patterns GLOB`. For MCP, set these in the server launch
+arguments. The bridge checks canonical workspace attachments, adds default
+denies for `.git` and `.ssh`, and passes the policy to a host isolation
+launcher. Guarded execution exits with an error if the launcher is absent.
+
+Set `AGY_BRIDGE_GUARD_LAUNCHER` to the absolute path of your verified host
+launcher. On Windows this must be an `.exe`. The launcher receives
+`--allowed-roots ROOT --deny-patterns GLOB ... -- AGY ARG ...`, including for
+model and version discovery. It must enforce the write policy for AGY and
+its descendants before starting AGY, preserve stdio and exit status, and
+reject policies it cannot enforce. Denies apply to matched paths and their
+descendants. Patterns match a path component, a root-relative path, or an
+absolute path using forward slashes. Denied paths take precedence over
+allowed roots.
+
+With the launcher configured, run `python -m agy_headless_bridge._guard_check`
+to check it against disposable files. The check requires an allowed write,
+preserved `.git`, `.ssh`, and glob-matched files, and blocked creation of a new
+glob match and a file outside the workspace. The writer runs as a descendant of
+the launcher's child. A passing check covers these cases on that host.
+
+This package supplies the launcher interface. Windows 10 has no native AGY
+terminal sandbox, and AGY's own flag governs terminal commands on supported
+systems. File-based `--heartbeat` requires a scratch workspace and is
+unavailable with the guard. MCP elapsed-time progress still works.
+[Google Antigravity terminal sandbox documentation](https://antigravity.google/docs/sandbox-mode).
+
+### Local OpenAI-compatible HTTP proxy
+
+Set `AGY_BRIDGE_API_KEY` to a local secret before starting the proxy.
+
+```bash
+agy-headless-bridge serve --port 8080
+```
+
+Use `http://127.0.0.1:8080/v1` as the base URL and the same secret as the
+Bearer API key. The proxy serves `GET /v1/models` and
+`POST /v1/chat/completions`. It accepts text messages and returns one
+completion with usage when AGY supplies it. `stream: true` sends SSE chunks once
+AGY finishes. The proxy supports plaintext chat and uses AGY plan mode without
+attaching a workspace. Tool calls, multimodal messages, and structured output
+are outside the supported API.
+
 ---
 
 ## Use cases & wiring it into your AI coding tools
@@ -394,6 +473,10 @@ Antigravity**, headlessly. Common setups:
 
 ### Wire into Claude Code
 
+Install the plugin to use its bundled `agy-headless-bridge:antigravity`
+subagent. In a checkout, Claude Code also discovers the project-scoped
+`antigravity` agent in `.claude/agents/`.
+
 Register the MCP server, then prompt Claude to use it:
 
 ```bash
@@ -409,6 +492,10 @@ with the community `antigravity-cc` Claude Code plugin — that handles the
 `/agy:*` commands and Gemini/Claude model swap; this handles the headless I/O.
 
 ### Wire into Codex (or any MCP client)
+
+In this trusted checkout, Codex loads the `antigravity` subagent and MCP
+configuration from `.codex/`. Install the bridge and ensure `agy-mcp-server`
+is on `PATH`. Ask Codex to delegate a scoped task to the `antigravity` subagent.
 
 Add the server to the client's MCP config:
 

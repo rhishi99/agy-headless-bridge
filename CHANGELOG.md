@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Scoped MCP document summaries with verified source quotes, a coverage gap list,
+  and on-demand AGY model preflight. The default preset is Hydrogen Low.
+- An opt-in local pytest recipe that reports the observed exit code, JUnit
+  counts when available, and a failing test ID. AGY synthesis of a failing
+  excerpt is optional.
+- Bounded delegation results and optional session-owned artifacts. The
+  [delegation guide](docs/DELEGATION.md) includes Codex and Claude Code
+  registration and reproducible demos.
+- Catalog-backed Flash and Pro aliases, MCP cancellation and elapsed-time
+  progress, and a Bearer-authenticated loopback OpenAI-compatible proxy.
+- Up to two independent read-only MCP jobs and rate-limited activity updates
+  from supported Antigravity CLI versions.
+- Opt-in tracked Git diffs and public-source research with bounded results.
+- An external isolation launcher interface and a checker for its write policy.
+  Guarded execution requires a verified launcher configured by the operator.
+
+### Fixed
+
+- Delegated document, Git and research calls no longer report a slow AGY startup
+  probe as the task deadline. The `--help` probe now has 30 seconds, and a probe
+  timeout says the task never started. Concurrent cold starts hit the old
+  10-second limit in the D07 Claude Code benchmark.
+
 ## [1.4.0] — 2026-11-05
 
 ### Added
@@ -215,7 +240,7 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.4.0...HEAD
 [1.2.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.1
 [1.2.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.0
 [1.1.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.1.0

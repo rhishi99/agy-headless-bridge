@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>agy-headless-bridge · PtyGravity</title>
-<meta name="description" content="Call the Google Antigravity CLI (agy) headlessly from any non-TTY context. Windows ConPTY + POSIX pty. Works around upstream bug #76." />
+<meta name="description" content="Run Google Antigravity headlessly. Delegate scoped documents and local pytest runs from Claude Code or Codex and get compact, verifiable results." />
 <style>
   :root{
     --bg:#0a0b10; --bg2:#0f1118; --card:#13161f; --line:#222634;
@@ -90,6 +90,29 @@
   .note{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.3);border-left:3px solid var(--warn);
     border-radius:10px;padding:14px 18px;margin-top:20px;color:#e8d9b0;font-size:14.5px}
 
+  .delegation{background:var(--bg2)}
+  .delegation-flow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:24px}
+  .delegation-flow article{min-width:0;border:1px solid var(--line);border-radius:8px;padding:20px;background:var(--card)}
+  .delegation-flow h3{margin-top:0}
+  .delegation-flow ol{padding-left:24px;color:var(--mut)}
+  .delegation-flow li{padding:6px 8px;border-left:2px solid transparent}
+  .delegation-flow li::marker{color:var(--acc2)}
+  .delegation-flow pre{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}
+  .delegation-controls{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-top:16px}
+  .delegation-controls button{cursor:pointer;color:var(--txt);background:var(--card);font:inherit;padding:6px 12px;border:1px solid var(--mut);border-radius:6px}
+  .delegation-controls button:hover{border-color:var(--acc2)}
+  .delegation-controls button:focus-visible{outline:2px solid var(--acc2);outline-offset:3px}
+  .delegation-flow.is-playing li{animation:trace-delegation .65s ease-out both;animation-delay:var(--step-delay,0s)}
+  .delegation-flow li:nth-child(2){--step-delay:.45s}
+  .delegation-flow li:nth-child(3){--step-delay:.9s}
+  @keyframes trace-delegation{35%{color:var(--txt);border-color:var(--acc2);background:#142431}}
+  @media(max-width:680px){.delegation-flow{grid-template-columns:1fr}}
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    .delegation-flow.is-playing li{animation:none}
+    .delegation-controls button{display:none}
+  }
+
   footer{padding:40px 0;text-align:center;color:var(--dim);font-size:14px}
   footer a{color:var(--mut)}
 </style>
@@ -98,7 +121,7 @@
 
 <header class="hero">
   <div class="wrap">
-    <span class="badge"><span class="dot"></span> works around upstream agy bug #76</span>
+    <span class="badge"><span class="dot"></span> Direct JSON and PTY fallback</span>
     <h1>agy<span class="grad">·</span>headless<span class="grad">·</span>bridge</h1>
     <p style="margin:18px 0 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <a href="https://pypi.org/project/agy-headless-bridge/"><img src="https://img.shields.io/pypi/v/agy-headless-bridge.svg?color=7c5cff" alt="PyPI"></a>
@@ -111,17 +134,53 @@
     <div class="cta">
       <a class="btn p" href="https://github.com/rhishi99/agy-headless-bridge">★ GitHub</a>
       <a class="btn s" href="#install">Install</a>
+      <a class="btn s" href="#delegation">Delegation demos</a>
       <a class="btn s" href="#arch">Architecture</a>
     </div>
   </div>
 </header>
 
+<section class="delegation" id="delegation" aria-labelledby="delegation-title">
+  <div class="wrap">
+    <h2 id="delegation-title">Delegate documents and tests</h2>
+    <p class="lead">Give Claude Code or Codex a focused question or a named test recipe. The bridge returns verified quotes or observed test results within a 2,000-character default budget.</p>
+    <div class="delegation-flow" id="delegation-flow">
+      <article aria-labelledby="delegation-doc-title">
+        <h3 id="delegation-doc-title">Check a source quote</h3>
+        <ol>
+          <li>Choose Markdown or text files in the registered workspace.</li>
+          <li>AGY reads the staged copies in plan mode.</li>
+          <li>The bridge checks quotes against each cited line range.</li>
+        </ol>
+        <pre>Frame cap: 65,536 bytes
+Source: relay.md, line 4
+Gap: rollback procedure unspecified</pre>
+      </article>
+      <article aria-labelledby="delegation-test-title">
+        <h3 id="delegation-test-title">Keep the failing test ID</h3>
+        <ol>
+          <li>Choose the approved local <code>pytest</code> recipe.</li>
+          <li>The runner captures the exit code and JUnit counts.</li>
+          <li>Read a bounded log excerpt when retention is enabled.</li>
+        </ol>
+        <pre>Exit code: 1
+Failed: test_relay.py::test_relay_contract
+AGY inference calls: 0</pre>
+      </article>
+    </div>
+    <div class="delegation-controls">
+      <button type="button" id="play-delegation" aria-controls="delegation-flow" hidden>Play workflow</button>
+      <a href="https://github.com/rhishi99/agy-headless-bridge/blob/main/docs/DELEGATION.md">Set up the demos in Claude Code or Codex</a>
+    </div>
+  </div>
+</section>
+
 <section id="problem">
   <div class="wrap">
     <div class="eyebrow">The problem</div>
-    <h2>agy goes silent when nobody's at the terminal</h2>
-    <p class="lead"><code>agy -p "&lt;prompt&gt;"</code> gates its stdout on <code>isatty()</code>. The moment stdout is <strong>not</strong> a real terminal — any automation — it prints nothing and exits <code>0</code>. No error, no output, just emptiness.</p>
-    <p style="color:var(--mut);font-size:14px"><strong>Update (v1.3.0):</strong> newer agy releases fixed this upstream (piped output works on agy 1.2.11). The bridge still adds idle/hard timeouts with partial output, typed errors for failed runs and spent quota (<code>AgyExitError</code> / <code>AgyQuotaError</code>), clean TUI-free text, support for older agy builds, and a dependency-free MCP server.</p>
+    <h2>Why the bridge needs a PTY fallback</h2>
+    <p class="lead">Older versions of <code>agy -p</code> use <code>isatty()</code> to decide whether to print. When launched through a pipe, they can exit successfully without an answer. AGY 1.2.11 added piped output.</p>
+    <p style="color:var(--mut);font-size:14px">The bridge provides typed quota and exit errors, idle and hard deadlines with partial output, and local MCP tools.</p>
     <div class="ba">
       <div class="panel bad">
         <h4><span class="pill b">BEFORE</span> piped / subprocess</h4>
@@ -168,14 +227,17 @@ flowchart TB
   <div class="wrap">
     <div class="eyebrow">Architecture</div>
     <h2>How a non-TTY caller gets clean output</h2>
-    <p class="lead">The bridge spawns <code>agy</code> attached to a brand-new pseudo-terminal that requires no pre-existing parent tty — so it works from anywhere.</p>
+    <p class="lead">AGY 1.2.11 and later run over plain pipes with JSON output. When the version is older or unknown, the bridge opens a fresh pseudo-terminal.</p>
 
     <div class="diagram">
       <pre class="mermaid">
 flowchart TD
     A["Caller — non-TTY<br/>Claude Code · MCP · subprocess · CI"] -->|"prompt"| B{{"run(prompt)"}}
     B --> C["find_agy()<br/>$AGY_PATH → PATH → OS defaults"]
-    C --> D{"sys.platform?"}
+    C --> V{"AGY 1.2.11 or later?"}
+    V -->|"yes"| J["Print to a pipe as JSON"]
+    J -->|"text and run metadata"| A
+    V -->|"older or unknown"| D{"sys.platform?"}
     D -->|"win32"| E["pywinpty<br/>PtyProcess.spawn"]
     D -->|"posix"| F["stdlib pty<br/>os.openpty + Popen"]
     E --> G(["fresh pseudo-terminal"])
@@ -187,11 +249,11 @@ flowchart TD
     classDef br fill:#1b1740,stroke:#7c5cff,color:#e7e9ef;
     classDef pty fill:#0c2730,stroke:#22d3ee,color:#e7e9ef;
     classDef agy fill:#0f2a1e,stroke:#34d399,color:#e7e9ef;
-    class B,C,I br;
+    class B,C,I,J br;
     class E,F,G pty;
     class H agy;
       </pre>
-      <div class="cap">Vertical data flow — same path on every platform, only the pty allocator differs.</div>
+      <div class="cap">Direct JSON is preferred on both platforms. The PTY allocator depends on the operating system.</div>
     </div>
 
     <h3>The tty handshake, step by step</h3>
@@ -240,10 +302,10 @@ sequenceDiagram
   <div class="wrap">
     <div class="eyebrow">Functionality</div>
     <h2>The API &amp; the output pipeline</h2>
-    <p class="lead">One core function, three entry points around it. Everything routes through <code>run()</code>.</p>
+    <p class="lead">Use <code>run()</code> for text or <code>run_result()</code> for structured AGY metadata. The scoped MCP tools also verify document quotes and report local pytest outcomes.</p>
 
     <h3>Core contract</h3>
-    <pre><span class="k">run</span>(prompt: str, timeout: float = <span class="s">180</span>, agy_path: str | None = <span class="s">None</span>) -&gt; str</pre>
+    <pre><span class="k">run</span>(prompt: str, timeout: float | None = <span class="s">None</span>, agy_path: str | None = <span class="s">None</span>) -&gt; str</pre>
     <table>
       <thead><tr><th>Raises / returns</th><th>When</th></tr></thead>
       <tbody>
@@ -324,7 +386,7 @@ scope where it was defined.</pre>
       <tbody>
         <tr><td><strong>Python 3.9+</strong></td><td><code>python --version</code></td></tr>
         <tr><td><strong>Antigravity CLI (<code>agy</code>)</strong></td><td>installed + authenticated — <a href="https://antigravity.google/cli">antigravity.google/cli</a>. Auth once interactively (browser OAuth) or set <code>ANTIGRAVITY_API_KEY</code>.</td></tr>
-        <tr><td><strong>Sanity check</strong></td><td>In a <em>real terminal</em>, <code>agy -p "say hi"</code> prints a reply. From a pipe it won't — that's the bug this fixes.</td></tr>
+        <tr><td><strong>Sanity check</strong></td><td>Run <code>agy -p "say hi"</code> in a terminal to confirm the CLI can sign in and produce a reply.</td></tr>
         <tr><td><strong>Windows only</strong></td><td><code>pywinpty</code> (auto-installed). POSIX uses stdlib <code>pty</code> — nothing extra.</td></tr>
       </tbody>
     </table>
@@ -419,12 +481,13 @@ agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
       <thead><tr><th>Env var</th><th>Default</th><th>Meaning</th></tr></thead>
       <tbody>
         <tr><td><code>AGY_PATH</code></td><td>auto-detect</td><td>Absolute path to the <code>agy</code> binary</td></tr>
-        <tr><td><code>AGY_BRIDGE_TIMEOUT</code></td><td><code>180</code></td><td>Seconds before a call is killed</td></tr>
+        <tr><td><code>AGY_BRIDGE_TIMEOUT</code></td><td><code>900</code></td><td>Hard deadline in seconds</td></tr>
+        <tr><td><code>AGY_BRIDGE_IDLE_TIMEOUT</code></td><td><code>300</code></td><td>Default idle deadline in seconds</td></tr>
       </tbody>
     </table>
 
-    <h3 style="margin-top:34px">Scope &amp; non-goals</h3>
-    <p class="lead" style="font-size:15.5px">Model selection (swapping Gemini Pro / Flash / Claude inside agy) is <strong>not</strong> handled here — that's an <code>agy</code> settings concern, already covered by the <code>antigravity-cc</code> Claude Code plugin (it patches <code>settings.json</code>). Pair the two. This bridge fixes the I/O layer they're missing; it does not install or authenticate <code>agy</code>.</p>
+    <h3 style="margin-top:34px">Model selection</h3>
+    <p class="lead" style="font-size:15.5px">Use <code>agy models</code> to see the models available to your account. General-purpose bridge calls accept an exact model ID or a catalog-backed alias such as <code>flash-low</code>. Document delegation defaults to Hydrogen Low and accepts exact model IDs.</p>
   </div>
 </section>
 
@@ -435,6 +498,15 @@ agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
   </div>
 </footer>
 
+<script>
+  const playDelegation = document.querySelector('#play-delegation');
+  const delegationFlow = document.querySelector('#delegation-flow');
+  playDelegation.hidden = false;
+  playDelegation.addEventListener('click', () => {
+    delegationFlow.classList.remove('is-playing');
+    requestAnimationFrame(() => requestAnimationFrame(() => delegationFlow.classList.add('is-playing')));
+  });
+</script>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
   mermaid.initialize({

@@ -1,0 +1,4 @@
+[mcp_servers.antigravity]
+command = "agy-mcp-server"
+args = []
+tool_timeout_sec = 960
