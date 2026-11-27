@@ -564,3 +564,67 @@ def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tm
     monkeypatch.setattr(bridge, "run_result", quota)
     result, _ = invoke(scope, "agy_find_code", question="q")
     assert result["status"] == "quota"
+
+
+def test_malformed_recipe_is_invalid_input(tmp_path):
+    result, size = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests",
+                          recipe=["ruff"], structured=True, max_chars=800)
+    assert result["status"] == "invalid_input"
+    assert size <= 800
+
+
+def test_unapproved_recipe_is_unknown(tmp_path):
+    scope = session(tmp_path, recipes={"ruff"})
+    result, _ = invoke(scope, "agy_run_tests", recipe="cargo-test")
+    assert result["status"] == "unknown_recipe"
+    assert result["summary"] == "Choose an approved test recipe."
+
+
+def test_recipe_lists_tests_tool_without_pytest(tmp_path):
+    tool = next(t for t in session(tmp_path, recipes={"ruff"}).tools if t["name"] == "agy_run_tests")
+    assert tool["inputSchema"]["properties"]["recipe"]["enum"] == ["ruff"]
+
+
+def test_ruff_recipe_reports_findings(tmp_path, monkeypatch):
+    def lint(argv, *args, **kwargs):
+        assert argv[-5:] == ["ruff", "check", "--output-format", "concise", "."]
+        return "a.py:1:8: F401 Imported but unused", 1
+
+    monkeypatch.setattr(bridge, "_run_direct", lint)
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
+    assert result["status"] == "failed"
+    assert result["facts"]["exit_code"] == 1
+    assert "F401" in result["excerpt"]
+
+
+def test_missing_runner_is_test_runner_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    result, _ = invoke(session(tmp_path, recipes={"npm-test"}), "agy_run_tests", recipe="npm-test")
+    assert result["status"] == "test_runner_error"
+
+
+def test_missing_ruff_is_runner_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: ("python: No module named ruff", 1))
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
+    assert result["status"] == "test_runner_error"
+
+
+def test_cargo_recipe_keeps_panic_details(tmp_path, monkeypatch):
+    output = ("running 1 test\ntests::addition --- FAILED\n\nfailures:\n\n"
+              "---- tests::addition stdout ----\n"
+              "thread 'tests::addition' panicked at src/lib.rs:10:5:\n"
+              "assertion `left == right` failed\n  left: 2\n right: 3\n\n"
+              "test result: FAILED. 0 passed; 1 failed\n"
+              "error: test failed, to rerun pass `--lib`\n")
+    monkeypatch.setattr(_delegation.shutil, "which", lambda _: "cargo")
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: (output, 101))
+    result, size = invoke(session(tmp_path, recipes={"cargo-test"}), "agy_run_tests",
+                          recipe="cargo-test", max_chars=800)
+    assert result["status"] == "failed" and size <= 800
+    assert "tests::addition" in result["excerpt"]
+    assert "assertion `left == right` failed" in result["excerpt"]
+
+
+def test_enable_recipe_requires_delegation_root():
+    with pytest.raises(SystemExit):
+        mcp_server.main(["--enable-recipe", "ruff"])
