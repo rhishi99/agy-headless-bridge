@@ -400,3 +400,53 @@ def test_document_accepts_log_traceback_and_invalid_utf8_and_rejects_exe(agy_cat
 
     res_exe, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["tool.exe"], question="What is this?")
     assert res_exe["status"] == "invalid_input"
+
+
+def test_changed_lines_parses_two_file_excerpt():
+    excerpt = (
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1,0 +5,2 @@\n"
+        "+x = 1\n"
+        "+y = 2\n"
+        "--- a/b.py\n"
+        "+++ b/b.py\n"
+        "@@ -3 +3 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3}}
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+def test_git_diff_review_verifies_findings_and_rejects_both_flags(tmp_path, agy_catalog, monkeypatch):
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    git("init")
+    (tmp_path / "app.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    git("add", "--", ".")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "Init")
+    (tmp_path / "app.py").write_text("a = 1\nb = 3\n", encoding="utf-8")
+    scope = session(tmp_path, git_enabled=True)
+
+    both, _ = invoke(scope, "agy_git_diff", summarize=True, review=True)
+    assert both["status"] == "invalid_input"
+
+    def review_agy(prompt, **options):
+        assert "Review this Git diff excerpt for bugs and risks." in prompt
+        assert options["extra_args"] == ["--json-schema", _delegation._REVIEW_SCHEMA]
+        return bridge.AgyResult("", structured_output={
+            "summary": "Potential bug on line 2.",
+            "findings": [
+                {"path": "app.py", "line": 2, "issue": "Changed value may overflow."},
+                {"path": "app.py", "line": 1, "issue": "Unchanged line finding."},
+            ],
+        })
+
+    monkeypatch.setattr(bridge, "run_result", review_agy)
+    result, _ = invoke(scope, "agy_git_diff", review=True)
+    assert result["model_status"] == "partial"
+    assert result["model_summary"] == "Potential bug on line 2."
+    assert result["findings"] == [{"path": "app.py", "line": 2, "issue": "Changed value may overflow."}]
