@@ -397,6 +397,8 @@ Start `agy-mcp-server --delegation-root /absolute/workspace` to opt in to
 fixed local test recipe and `--retain-delegation-artifacts` for bounded
 log excerpts. Document summaries use the selected AGY model. Pytest runs
 locally, with model summaries available on request for failures.
+Add `--enable-code-search` to register `agy_find_code`, which locates code and returns
+file:line citations the bridge verified against the workspace.
 
 The default response budget is 2,000 characters. See the
 [delegation guide](docs/DELEGATION.md) for client commands, exact options,
