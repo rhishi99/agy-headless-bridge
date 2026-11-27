@@ -194,18 +194,21 @@ def _json(value):
 
 def _changed_lines(excerpt):
     changed, current = {}, None
-    for line in excerpt.splitlines():
-        if line == "+++ /dev/null":
-            current = None
-        elif line.startswith("+++ b/"):
-            current = line[6:]
-        elif current is not None:
-            match = _HUNK_HEADER.match(line)
-            if match:
-                start = int(match.group(1))
-                count = int(match.group(2)) if match.group(2) is not None else 1
-                if count > 0:
-                    changed.setdefault(current, set()).update(range(start, start + count))
+    number = remaining = 0
+    for line in excerpt.split("\n")[:-1]:
+        match = _HUNK_HEADER.match(line)
+        if line.startswith("diff --git "):
+            current, remaining = None, 0
+        elif match:
+            number = int(match[1])
+            remaining = int(match[2]) if match[2] is not None else 1
+        elif remaining and line.startswith(("+", " ")):
+            if current is not None and line.startswith("+"):
+                changed.setdefault(current, set()).add(number)
+            number += 1
+            remaining -= 1
+        elif not remaining and line.startswith("+++ "):
+            current = line[6:] if line.startswith("+++ b/") else None
     return changed
 
 
@@ -489,6 +492,11 @@ class DelegationSession:
             return _result("git_unavailable", "Git inspection could not start.")
         result = _result("partial" if status else "ok", "Inspected tracked Git changes.", facts=facts,
                          excerpt=excerpt[:1800] if not status else "")
+        if review:
+            prefix, marker, _ = excerpt.partition(bridge._CAPTURE_LIMIT_MARKER)
+            result["excerpt"] = prefix[:1800] if not status else ""
+            if marker or len(prefix) > 1800:
+                result["truncated"] = True
         if model and result["excerpt"]:
             ready, cli = _preflight(model, options.get("cancel"))
             result["model"] = model
@@ -531,7 +539,8 @@ class DelegationSession:
                             kept_limited = kept[:8]
                             result["findings"] = kept_limited
                             result["model_summary"] = answer["summary"][:400]
-                            result["model_status"] = "ok" if len(kept_limited) == len(answer["findings"]) else "partial"
+                            complete = not result.get("truncated") and len(kept_limited) == len(answer["findings"])
+                            result["model_status"] = "ok" if complete else "partial"
                         else:
                             result["model_status"] = "unusable_model_output"
                     else:
