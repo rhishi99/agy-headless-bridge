@@ -52,6 +52,7 @@ Open a new client session and confirm it lists `agy_preflight`, `agy_summarize_d
 ### What the tools can access
 
 - `--delegation-root` authorizes this MCP connection to select Markdown or text files under that directory. The bridge copies up to four UTF-8 files and 4 MiB total into a temporary attachment. The selected content goes to the AGY service under your AGY account. Choose files you can share with that service.
+- AGY reads about 3,000 lines per document call. Notes up to roughly 2,000–3,000 lines are read in full. For larger notes AGY samples line ranges, so a fact outside those ranges can be missed. In testing, AGY listed the unread ranges under gaps. Split very large notes or ask a focused question.
 - `--enable-pytest` approves `python -m pytest` with fixed report arguments in that workspace. Project tests, fixtures, and plugins execute locally with your user's permissions and may write caches or build outputs. Enable this on a workspace whose tests you trust.
 - The delegation tools use a trusted local MCP connection. AGY plan mode is a CLI setting. This registration is incompatible with the bridge's guarded launcher flags.
 - Omit `--enable-pytest` or `--retain-delegation-artifacts` when you only need document summaries. Existing general-purpose AGY tools retain their own workspace and permission settings.
