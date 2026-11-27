@@ -357,3 +357,46 @@ def test_document_summary_hides_staging_directory(agy_catalog, monkeypatch, tmp_
     result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
     assert result["summary"] == "relay.md caps frames; see relay.md."
     assert result["gaps"] == ["Rollback in relay.md is unspecified."]
+
+
+def test_document_accepts_log_traceback_and_invalid_utf8_and_rejects_exe(agy_catalog, monkeypatch, tmp_path):
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        '  File "app.py", line 12, in main\n'
+        "    run()\n"
+        "RuntimeError: boom\n"
+    )
+    (tmp_path / "build.log").write_text(traceback_text, encoding="utf-8")
+    (tmp_path / "bad.log").write_bytes(b"ok\n\xff\xfe bad\nERROR boom\n")
+    (tmp_path / "tool.exe").write_bytes(b"MZ\x90\x00")
+
+    def answer(prompt, **options):
+        if "build.log" in prompt:
+            structured = {
+                "summary": "Build failed with RuntimeError.",
+                "evidence": [{"path": "build.log", "start_line": 4, "end_line": 4, "quote": "RuntimeError: boom"}],
+                "gaps": [],
+            }
+        else:
+            staged, = options["add_dirs"]
+            text = (Path(staged) / "bad.log").read_text(encoding="utf-8")
+            assert text == "ok\n\ufffd\ufffd bad\nERROR boom\n"
+            structured = {
+                "summary": "Log recorded an error.",
+                "evidence": [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": text.splitlines()[1]}],
+                "gaps": [],
+            }
+        return bridge._finish(json.dumps({"status": "SUCCESS", "response": "", "structured_output": structured}), 0)
+
+    monkeypatch.setattr(bridge, "run_result", answer)
+
+    res_log, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["build.log"], question="Why did it fail?")
+    assert res_log["status"] == "ok"
+    assert res_log["evidence"] == [{"path": "build.log", "start_line": 4, "end_line": 4, "quote": "RuntimeError: boom"}]
+
+    res_bad, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["bad.log"], question="Any errors?")
+    assert res_bad["status"] == "ok"
+    assert res_bad["evidence"] == [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": "\ufffd\ufffd bad"}]
+
+    res_exe, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["tool.exe"], question="What is this?")
+    assert res_exe["status"] == "invalid_input"
