@@ -728,7 +728,11 @@ class DelegationSession:
                                   "test_runner_error": f"Could not launch the {recipe} recipe."}[status], facts=facts)
         if output and status != "ok":
             detail = _PYTEST_DETAIL.search(output) if match else None
-            found = re.search(r"^.*error", output, re.IGNORECASE | re.MULTILINE) if recipe not in ("pytest", "ruff") else None
+            found = None
+            if recipe == "cargo-test":
+                found = re.search(r"^---- .+ stdout ----$", output, re.MULTILINE)
+            if found is None and recipe in ("cargo-test", "npm-test"):
+                found = re.search(r"^.*error", output, re.IGNORECASE | re.MULTILINE)
             excerpt = detail[1] if detail else output[found.start():] if found else output.lstrip()
             result["excerpt"] = excerpt[: min(3800, cap // 2)]
         if status == "failed" and model is not None:

@@ -608,6 +608,22 @@ def test_missing_ruff_is_runner_error(tmp_path, monkeypatch):
     assert result["status"] == "test_runner_error"
 
 
+def test_cargo_recipe_keeps_panic_details(tmp_path, monkeypatch):
+    output = ("running 1 test\ntests::addition --- FAILED\n\nfailures:\n\n"
+              "---- tests::addition stdout ----\n"
+              "thread 'tests::addition' panicked at src/lib.rs:10:5:\n"
+              "assertion `left == right` failed\n  left: 2\n right: 3\n\n"
+              "test result: FAILED. 0 passed; 1 failed\n"
+              "error: test failed, to rerun pass `--lib`\n")
+    monkeypatch.setattr(_delegation.shutil, "which", lambda _: "cargo")
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: (output, 101))
+    result, size = invoke(session(tmp_path, recipes={"cargo-test"}), "agy_run_tests",
+                          recipe="cargo-test", max_chars=800)
+    assert result["status"] == "failed" and size <= 800
+    assert "tests::addition" in result["excerpt"]
+    assert "assertion `left == right` failed" in result["excerpt"]
+
+
 def test_enable_recipe_requires_delegation_root():
     with pytest.raises(SystemExit):
         mcp_server.main(["--enable-recipe", "ruff"])
