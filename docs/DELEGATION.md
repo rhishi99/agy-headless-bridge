@@ -85,3 +85,15 @@ Expect exit code **1**, one failed test, and the ID `test_relay.py::test_relay_c
 Use `max_chars` to lower a level's limit, down to 512 characters. These limits count compact serialized result characters. The server budgets for both the text and structured copies when the connection negotiates MCP `2025-06-18`. Host-added wrappers and model tokens vary by client. Older MCP clients receive the text result. The `truncated` flag indicates the bridge reduced the result to fit the budget.
 
 Artifacts require `--retain-delegation-artifacts` and `retain: true`. The server stores up to eight in memory, with a 64 KiB limit per artifact. Each ID expires after ten minutes and only works on the MCP connection that created it. `agy_read_artifact` accepts one-based ranges of up to 100 lines and applies the same response budget to the excerpt. The artifact may expire, be evicted, or be unavailable if it exceeded its size limit.
+
+## Run jobs together and follow progress
+
+The server can run two independent read-only calls at a time. Use `--jobs 1` to serialize all calls. Pytest and workspace-attached `agy_ask` calls run exclusively. Requests that resume the same AGY conversation run in order. The server returns a busy result if eight calls are already outstanding.
+
+Clients can request MCP progress notifications with a `progressToken`. The bridge sends at most one update every five seconds. In direct mode with AGY 1.5.18 or newer, an update can report observed AGY activity from a tool or response step. PTY and older versions report elapsed time. A client's cancellation stops its job, including the process tree where the platform supports it.
+
+## Opt in to Git inspection and public research
+
+Enable `--enable-git` on a trusted Git worktree to register `agy_git_diff`. Choose a local `baseline` such as `HEAD` or a commit ID and optionally pass relative `paths`. The tool returns the verified HEAD and baseline, counts of tracked changes including renames, and a bounded diff excerpt. It omits untracked files and submodule internals. Git uses the worktree's local filters. Set `summarize: true` to send the excerpt to AGY for analysis. When the response needs trimming, the bridge shortens the excerpt before trimming the requested analysis.
+
+Enable `--enable-public-research` to register `agy_public_research`. Pass a `question` and `network: true` per call. AGY starts in a disposable directory with no workspace attachment and receives instructions to read public sources. The result reports source URLs, the claims they support, and gaps. The bridge checks the shape of the URLs. Check the cited pages to verify claims.

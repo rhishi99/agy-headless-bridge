@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   registration and reproducible demos.
 - Catalog-backed Flash and Pro aliases, MCP cancellation and elapsed-time
   progress, and a Bearer-authenticated loopback OpenAI-compatible proxy.
+- Up to two independent read-only MCP jobs and rate-limited activity updates
+  from supported Antigravity CLI versions.
+- Opt-in tracked Git diffs and public-source research with bounded results.
 - An external isolation launcher interface and a checker for its write policy.
   Guarded execution requires a verified launcher configured by the operator.
 

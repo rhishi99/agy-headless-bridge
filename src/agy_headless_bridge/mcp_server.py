@@ -36,9 +36,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 from . import __version__
 from ._guard import add_guard_arguments, guarded_command
@@ -69,6 +71,9 @@ STRUCTURED_PROTOCOL_VERSION = "2025-06-18"
 # calling model's context. 0 = no cap.
 MAX_CHARS_ENV = "AGY_BRIDGE_MAX_CHARS"
 DEFAULT_MAX_CHARS = 4000
+MAX_PENDING_JOBS = 8
+_SCOPED_READ_TOOLS = {"agy_preflight", "agy_summarize_document", "agy_read_artifact",
+                      "agy_git_diff", "agy_public_research"}
 
 _CAP_PROPS = {
     "brief": {
@@ -367,6 +372,39 @@ def handle_request(req: dict, *, run_options=None, delegation=None, structured=F
     }
 
 
+@dataclass
+class _ToolJob:
+    request: dict
+    structured: bool
+    progress_token: int | str | None
+    read_only: bool
+    conversation: str | None
+    cancel: threading.Event = field(default_factory=threading.Event)
+
+
+def _job_scope(params) -> tuple[bool, str | None]:
+    if not isinstance(params, dict):
+        return False, None
+    name = params.get("name")
+    if isinstance(name, str) and name in _SCOPED_READ_TOOLS:
+        return True, None
+    args = params.get("arguments")
+    if name not in ("agy_ask", "agy_research") or not isinstance(args, dict):
+        return False, None
+    conversation = args.get("conversation")
+    if not isinstance(conversation, str) or not conversation:
+        conversation = None
+    read_only = False
+    if (name == "agy_ask" and args.get("mode") == "plan"
+            and args.get("workspace") == "none" and not args.get("add_dir")
+            and not args.get("skip_permissions") and not args.get("heartbeat")):
+        try:
+            read_only = 0 < _max_chars(args.get("max_chars")) <= DEFAULT_MAX_CHARS
+        except ValueError:
+            pass  # The tool handler reports invalid caps.
+    return read_only, conversation
+
+
 def main(argv: list[str] | None = None) -> int:
     # Force UTF-8 on stdio regardless of the host locale (e.g. cp936/GBK on
     # Chinese Windows, cp1252 on Western). MCP clients serialize JSON-RPC as
@@ -381,6 +419,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable-pytest", action="store_true", help="Approve the fixed local pytest recipe")
     parser.add_argument("--retain-delegation-artifacts", action="store_true", help="Allow temporary session artifacts")
     parser.add_argument("--enable-full-delegation-output", action="store_true", help="Enable the 8000-character output level")
+    parser.add_argument("--jobs", type=int, choices=(1, 2), default=2, help="Maximum concurrent read-only jobs (default: 2)")
+    parser.add_argument("--enable-git", action="store_true", help="Enable tracked Git diff inspection")
+    parser.add_argument("--enable-public-research", action="store_true", help="Enable opt-in public web research")
     args = parser.parse_args(argv)
     policy = {}
     delegation = None
@@ -399,55 +440,100 @@ def main(argv: list[str] | None = None) -> int:
         try:
             delegation = DelegationSession(args.delegation_root, pytest_enabled=args.enable_pytest,
                                            retention=args.retain_delegation_artifacts,
-                                           full=args.enable_full_delegation_output)
+                                           full=args.enable_full_delegation_output, git_enabled=args.enable_git,
+                                           research_enabled=args.enable_public_research)
         except (OSError, RuntimeError, ValueError):
             parser.error("--delegation-root must point to an existing directory")
         if not delegation.root.is_dir():
             parser.error("--delegation-root must point to an existing directory")
-    elif args.enable_pytest or args.retain_delegation_artifacts or args.enable_full_delegation_output:
+    elif (args.enable_pytest or args.retain_delegation_artifacts or args.enable_full_delegation_output
+          or args.enable_git or args.enable_public_research):
         parser.error("Delegation options require --delegation-root")
-    lock = threading.Lock()
-    pending = {}
+    lock = threading.Condition()
+    pending: dict[int | str, _ToolJob] = {}
+    running: set[int | str] = set()
+    stopping = initialized = False
     structured = False
 
+    def stop():
+        nonlocal stopping
+        stopping = True
+        for req_id in list(pending):
+            if req_id in running:
+                pending[req_id].cancel.set()
+            else:
+                del pending[req_id]
+        lock.notify_all()
+
+    def send(response):
+        try:
+            _send(response)
+        except BrokenPipeError:
+            stop()
+
     def send_error(req_id, code, message):
-        _send({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}})
+        send({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}})
 
-    def run_tool(req, cancel, progress_token, structured):
-        req_id = req["id"]
+    def run_tool(job):
+        req_id = job.request["id"]
 
-        def progress(elapsed):
+        def progress(elapsed, message):
             with lock:
-                if not cancel.is_set():
-                    _send({
+                if not job.cancel.is_set():
+                    send({
                         "jsonrpc": "2.0", "method": "notifications/progress",
-                        "params": {"progressToken": progress_token, "progress": elapsed},
+                        "params": {"progressToken": job.progress_token, "progress": elapsed, "message": message},
                     })
 
+        response = None
         try:
-            if not cancel.is_set():
-                response = handle_request(req, run_options={
+            if not job.cancel.is_set():
+                response = handle_request(job.request, run_options={
                     **policy,
-                    "cancel": cancel, "on_progress": progress if progress_token is not None else None,
-                }, delegation=delegation, structured=structured)
-                with lock:
-                    if not cancel.is_set() and response is not None:
-                        _send(response)
+                    "cancel": job.cancel, "on_status": progress if job.progress_token is not None else None,
+                }, delegation=delegation, structured=job.structured)
         except Exception as exc:
-            with lock:
-                if not cancel.is_set():
-                    send_error(req_id, -32603, str(exc))
+            response = {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(exc)}}
         finally:
             with lock:
-                pending.pop(req_id, None)
+                running.remove(req_id)
+                del pending[req_id]
+                lock.notify_all()
+                if not job.cancel.is_set() and response is not None:
+                    send(response)
+                schedule()
 
-    # Keep AGY jobs serialized as before while reading cancellations and pings.
-    with ThreadPoolExecutor(max_workers=1) as worker:
+    def schedule():
+        if stopping:
+            return
+        active = [pending[req_id] for req_id in running]
+        for req_id, job in pending.items():
+            if len(active) == args.jobs or any(not current.read_only for current in active):
+                break
+            if req_id in running:
+                continue
+            if active and not job.read_only:
+                break  # Let a waiting writer run before later readers.
+            if job.conversation and any(job.conversation == current.conversation for current in active):
+                continue
+            running.add(req_id)
+            active.append(job)
+            worker.submit(run_tool, job)
+
+    def terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    with ThreadPoolExecutor(max_workers=args.jobs) as worker:
+        previous_sigterm = None
+        if os.name == "posix" and threading.current_thread() is threading.main_thread():
+            previous_sigterm = signal.signal(signal.SIGTERM, terminate)
         try:
             for line in sys.stdin:
                 if not line.strip():
                     continue
                 with lock:
+                    if stopping:
+                        break
                     try:
                         req = json.loads(line)
                         if not isinstance(req, dict):
@@ -459,34 +545,48 @@ def main(argv: list[str] | None = None) -> int:
                         if "id" not in req and method == "notifications/cancelled":
                             target = params.get("requestId") if isinstance(params, dict) else None
                             if type(target) in (str, int) and target in pending:
-                                pending[target].set()
+                                if target in running:
+                                    pending[target].cancel.set()
+                                else:
+                                    del pending[target]
+                                    schedule()
+                        elif "id" not in req and method == "notifications/initialized":
+                            initialized = True
                         elif "id" in req and method == "tools/call":
                             if type(req_id) not in (str, int) or req_id in pending:
                                 send_error(req_id, -32600, "Invalid or duplicate request ID")
                                 continue
-                            if len(pending) >= 8:
-                                _send(_tool_error(req_id, "[agy-mcp] AGY request queue is full"))
+                            if len(pending) >= MAX_PENDING_JOBS:
+                                send(_tool_error(req_id, "[agy-mcp] AGY request queue is full"))
                                 continue
                             meta = params.get("_meta") if isinstance(params, dict) else None
                             token = meta.get("progressToken") if isinstance(meta, dict) else None
-                            cancel = pending[req_id] = threading.Event()
-                            worker.submit(run_tool, req, cancel, token if type(token) in (str, int) else None,
-                                          structured)
+                            read_only, conversation = _job_scope(params)
+                            pending[req_id] = _ToolJob(req, structured, token if type(token) in (str, int) else None,
+                                                       read_only, conversation)
+                            schedule()
                         else:
                             response = handle_request(req, delegation=delegation)
                             if response is not None:
                                 if method == "initialize":
                                     structured = response["result"]["protocolVersion"] == STRUCTURED_PROTOCOL_VERSION
-                                _send(response)
+                                send(response)
                     except json.JSONDecodeError:
                         send_error(None, -32700, "Parse error")
                     except Exception as exc:  # pragma: no cover - defensive
                         send_error(None, -32603, str(exc))
+            with lock:
+                if initialized:
+                    stop()
+                # Preserve piped, one-shot requests that never opened an MCP session.
+                lock.wait_for(lambda: not pending)
         except BaseException:
             with lock:
-                for cancel in pending.values():
-                    cancel.set()
+                stop()
             raise
+        finally:
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
     return 0
 
 

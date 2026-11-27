@@ -357,6 +357,7 @@ class AgyCancelledError(RuntimeError):
 class _RunControl:
     cancel: threading.Event | None
     on_progress: Callable[[float], None] | None
+    on_status: Callable[[float, str], None] | None = None
     job: object = None
     pid: int | None = None
 
@@ -395,6 +396,7 @@ class _Liveness:
         self.progress = progress
         self.control = control
         self.start = self.last = self.last_tick = time.monotonic()
+        self.last_step = 0.0
         self._sig = self._stat()
 
     @property
@@ -417,8 +419,12 @@ class _Liveness:
         now = time.monotonic()
         if self.control:
             self.control.check()
-            if self.control.on_progress and now - self.last_tick >= _PROGRESS_INTERVAL:
-                self.control.on_progress(now - self.start)
+            if now - self.last_tick >= _PROGRESS_INTERVAL:
+                if self.control.on_status:
+                    message = "AGY activity observed" if self.last_step > self.last_tick else "Elapsed time"
+                    self.control.on_status(now - self.start, message)
+                if self.control.on_progress:
+                    self.control.on_progress(now - self.start)
                 self.last_tick = now
         sig = self._stat()
         if sig != self._sig:
@@ -428,13 +434,46 @@ class _Liveness:
 
 
 _CAPTURE_LIMIT_MARKER = "\n[bridge: capture limit exceeded]\n"
+_STREAM_LINE_LIMIT = 1024 * 1024
+_MIN_STREAM_VERSION = (1, 5, 18)
+
+
+def _stream_results(stdout, live):
+    """Keep the terminal frame and observe steps without retaining their payloads."""
+    received_result, error, oversized = False, "", False
+    while line := stdout.readline(_STREAM_LINE_LIMIT):
+        live.bump()
+        complete = line.endswith(b"\n") or len(line) < _STREAM_LINE_LIMIT
+        if oversized or not complete:
+            oversized = not complete
+            continue
+        try:
+            frame = json.loads(line)
+        except (ValueError, RecursionError):
+            if not error and line.lower().startswith(b"error:"):
+                error = line[:600].decode("utf-8", errors="replace").strip()
+            continue
+        if not isinstance(frame, dict):
+            continue
+        event = frame.get("event")
+        if event == "result" and isinstance(frame.get("result"), dict):
+            received_result = True
+            yield json.dumps(frame["result"])
+        elif event == "error" and isinstance(frame.get("error"), dict):
+            error = str(frame["error"].get("message", ""))[:600]
+        elif event == "step_update" and isinstance(frame.get("step_update"), dict):
+            step = frame["step_update"]
+            if step.get("state") in ("ACTIVE", "DONE") and step.get("step_type") in ("tool", "agent_response"):
+                live.last_step = time.monotonic()
+    if not received_result:
+        yield json.dumps({"status": "ERROR", "error": error or "AGY stream ended without a result."})
 
 
 def _run_direct(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     progress: str | None = None,
     *, control: _RunControl | None = None, cwd: str | None = None,
-    capture_limit: int | None = None,
+    capture_limit: int | None = None, stream: bool = False, env: dict[str, str] | None = None,
 ) -> tuple[str, int | None]:
     """Spawn agy on plain pipes (agy >= MIN_DIRECT_VERSION). Returns its raw
     stdout+stderr, not clean()ed: the JSON reply may hold box-drawing glyphs
@@ -442,7 +481,7 @@ def _run_direct(
     group = bool(control and control.cancel is not None and sys.platform != "win32")
     proc = subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, start_new_session=group,
+        stderr=subprocess.STDOUT, start_new_session=group, env=env,
         **({"cwd": cwd} if cwd is not None else {}),
     )
     if group:
@@ -450,8 +489,14 @@ def _run_direct(
     chunks: list[bytes] = []
     head, tail = bytearray(), bytearray()
     live = _Liveness(progress, control)
+    streamed = ""
 
     def _reader() -> None:
+        nonlocal streamed
+        if stream:
+            for streamed in _stream_results(proc.stdout, live):
+                pass
+            return
         for data in iter(lambda: proc.stdout.read1(4096), b""):
             if capture_limit is None:
                 chunks.append(data)
@@ -466,6 +511,8 @@ def _run_direct(
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
     def text() -> str:
+        if stream:
+            return streamed
         if capture_limit is None:
             data = b"".join(chunks)
         elif tail:
@@ -496,7 +543,7 @@ def _run_direct(
         proc.wait()
         t.join(5)
         if isinstance(exc, AgyTimeoutError):
-            exc.partial = clean(text()) if capture_limit is None else text()
+            exc.partial = "" if stream else (clean(text()) if capture_limit is None else text())
         raise
     # Bounded: a grandchild agy spawned can hold the pipe open after agy exits.
     t.join(_EXIT_DRAIN_SECONDS)
@@ -506,7 +553,7 @@ def _run_direct(
 def _run_windows(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     progress: str | None = None,
-    *, control: _RunControl | None = None,
+    *, control: _RunControl | None = None, cwd: str | None = None,
 ) -> tuple[str, int | None]:
     try:
         from winpty import PtyProcess  # type: ignore
@@ -518,7 +565,7 @@ def _run_windows(
     # NB: ConPTY batches output and may not surface a partial (un-terminated)
     # line until the child exits, so `.partial` on a Windows timeout is
     # best-effort — it holds whatever ConPTY had already flushed, often empty.
-    proc = PtyProcess.spawn(argv, dimensions=(PTY_ROWS, PTY_COLS))
+    proc = PtyProcess.spawn(argv, dimensions=(PTY_ROWS, PTY_COLS), cwd=cwd)
     chunks: list[str] = []
     # The reader bumps this on every chunk; the main loop polls it to detect a
     # stall without blocking on the read itself.
@@ -600,7 +647,7 @@ def _terminate_windows(proc, t: threading.Thread) -> None:
 def _run_posix(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     progress: str | None = None,
-    *, control: _RunControl | None = None,
+    *, control: _RunControl | None = None, cwd: str | None = None,
 ) -> tuple[str, int | None]:
     import pty
     import select
@@ -628,6 +675,7 @@ def _run_posix(
             stderr=slave_fd,
             close_fds=True,
             env=env,
+            cwd=cwd,
             start_new_session=group,
         )
         if group:
@@ -694,7 +742,7 @@ def _run_posix(
 def _pty_run(
     argv: list[str], timeout: float, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     progress: str | None = None,
-    *, control: _RunControl | None = None,
+    *, control: _RunControl | None = None, cwd: str | None = None,
 ) -> str:
     """Spawn argv attached to a fresh pty; return its cleaned stdout.
 
@@ -707,6 +755,8 @@ def _pty_run(
     """
     runner = _run_windows if sys.platform == "win32" else _run_posix
     kwargs = {"control": control} if control else {}
+    if cwd is not None:
+        kwargs["cwd"] = cwd
     return _check_exit(*runner(argv, timeout, idle_timeout, progress, **kwargs))
 
 
@@ -960,6 +1010,8 @@ def run_result(
     heartbeat: bool = False,
     cancel: threading.Event | None = None,
     on_progress: Callable[[float], None] | None = None,
+    on_status: Callable[[float, str], None] | None = None,
+    cwd: str | None = None,
     allowed_roots: list[str] | None = None,
     deny_patterns: list[str] | None = None,
 ) -> AgyResult:
@@ -984,6 +1036,8 @@ def run_result(
 
     Set `cancel` to stop the local process tree and raise AgyCancelledError.
     `on_progress` reports elapsed seconds independently of the idle timer.
+    `on_status` adds a quiet activity message when a supported AGY emits steps.
+    `cwd` sets the child working directory without changing the caller's process.
     `allowed_roots` and `deny_patterns` require a host isolation launcher.
 
     `skip_permissions` passes `--dangerously-skip-permissions`, which headless
@@ -1004,7 +1058,7 @@ def run_result(
         # Measured on agy 1.5.0: plan mode writes nothing, so the progress file
         # would stay empty and the short idle bound would kill a healthy run.
         raise ValueError("heartbeat needs file writes, which plan mode blocks")
-    control = _RunControl(cancel, on_progress) if cancel is not None or on_progress else None
+    control = _RunControl(cancel, on_progress, on_status) if cancel is not None or on_progress or on_status else None
     if control:
         control.check()
     hard = DEFAULT_TIMEOUT if timeout is None else check_seconds(timeout)
@@ -1023,6 +1077,9 @@ def run_result(
     model = resolve_model(path, model, prefix, cancel=cancel)
     probe_options = {"cancel": cancel} if cancel is not None else {}
     direct = _use_direct(path, *([prefix] if prefix else []), **probe_options)
+    stream = bool(on_status and direct and not any(
+        arg.split("=", 1)[0] == "--output-format" for arg in extra_args or []
+    ) and _agy_version(path, *([prefix] if prefix else []), **probe_options) >= _MIN_STREAM_VERSION)
     if control:
         control.check()
     folder = progress = None
@@ -1034,15 +1091,19 @@ def run_result(
         prompt += HEARTBEAT_INSTRUCTION.format(path=progress.replace("\\", "/"))
     argv = [*prefix, *build_argv(
         path, prompt, add_dirs=add_dirs, model=model,
-        timeout=hard, extra_args=extra_args,
+        timeout=hard, extra_args=["--output-format", "stream-json", *(extra_args or [])] if stream else extra_args,
         skip_permissions=skip_permissions, mode=mode, effort=effort,
-        conversation=conversation, output_json=direct,
+        conversation=conversation, output_json=direct and not stream,
     )]
     try:
         runner_kwargs = {"control": control} if control else {}
+        if cwd is not None:
+            runner_kwargs["cwd"] = cwd
         if control:
             argv = control.wrap(argv)
         if direct:
+            if stream:
+                runner_kwargs["stream"] = True
             res = _finish(*_run_direct(argv, hard, idle, progress, **runner_kwargs))
         else:
             # progress only when set: keeps the 3-argument seam tests patch.

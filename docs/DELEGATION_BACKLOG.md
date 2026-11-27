@@ -2,7 +2,7 @@
 
 The first release slice helps a caller summarize a long document or run a noisy failing test without loading the source or full log into its context. The caller gets a short answer it can verify. The [integration analysis](INTEGRATION_AND_COMPETITIVE_ANALYSIS.md) describes the verified v1.4.0 baseline and the competitive evidence.
 
-D01–D05 have implementations and offline coverage. D06 has client setup and reproducible demos in the [delegation guide](DELEGATION.md). Native execution and client-visible size measurements are still release gates. The diagram shows the main dependencies.
+D01–D06 cover the initial workflows, native client setup, and client-visible result measurements. The [delegation guide](DELEGATION.md) contains the demos. The diagram shows the main dependencies.
 
 ```mermaid
 flowchart LR
@@ -33,7 +33,7 @@ flowchart LR
 - [x] Ship `summary`, `standard`, and explicitly enabled `full` with 2,000, 4,000, and 8,000-character limits. Callers can request less.
 - [x] Gate artifact retention on explicit server and caller opt-in. Enforce ID scope, expiry, size limits, and bounded line reads.
 - [x] Cover Unicode, malformed summaries, oversized diagnostics, denials and quota, disabled retention, missing artifacts, and cross-session denial.
-- [ ] Measure which result copies both native hosts expose to their models. Measure caller tokens in D07.
+- [x] Measure which result copies both native hosts expose to their models. Measure caller tokens in D07.
 
 ### D03 — Summarize a long document with verifiable references
 
@@ -42,7 +42,8 @@ flowchart LR
 - [x] Stage scoped Markdown and text paths from a registered workspace and send AGY a focused question. Treat document contents as source material.
 - [x] Use AGY `--json-schema` for summaries, references, and gaps. Verify paths and verbatim quotes against staged files. Return bounded partial or error results when output or references are unavailable.
 - [x] Pass the offline D01 document fixture and the Windows stdio smoke with AGY 1.5.18. Hydrogen Low returned the frame cap at line 4 and the rollback gap. Both serialized representations totaled 1,246 characters.
-- [ ] Run the synthetic document in both native hosts during D06 and verify live AGY read behavior on POSIX before claiming that combination.
+- [x] Run the synthetic document in both native hosts on Windows during D06.
+- [ ] Verify document reads against native, authenticated AGY on POSIX. WSL passed the offline workflow fixtures.
 
 ### D04 — Run configured tests and preserve execution facts
 
@@ -63,7 +64,7 @@ flowchart LR
 
 - [x] Document version-pinned Codex and Claude Code registrations, trusted-project settings, preflight, and two demo prompts. Bundle a Claude Code skill that calls MCP directly.
 - [x] Smoke test a fresh install, tool discovery, the Markdown summary, and the noisy failing test in native Codex. Record model-visible response sizes and results.
-- [ ] Run both demos in native Claude Code and record model-visible response sizes and results. Claude Code 2.1.332 discovered the scoped tools and reached its weekly inference limit before making any calls.
+- [x] Run both demos in native Claude Code and record model-visible response sizes and results.
 - [ ] Release gate for the first slice is green offline tests plus the documented client smokes. Any public claim about measured token savings depends on D07.
 
 The Windows smoke used Codex CLI 0.172.0 with `gpt-6.2-sol`, AGY 1.5.18, and a freshly installed local preview wheel with package metadata `1.4.0`. Only the synthetic fixtures were in the delegation workspace. The document call used `gemini-4-hydrogen-low`. Preflight queried the catalog, and pytest and artifact retrieval ran locally.
@@ -77,45 +78,54 @@ The Windows smoke used Codex CLI 0.172.0 with `gpt-6.2-sol`, AGY 1.5.18, and a f
 
 The Codex transcript contained both the text and structured copies. The serialized result sizes include JSON fields and escaping.
 
+Claude Code 2.1.332 with `claude-haiku-5-5` ran the same fixtures on Windows from the fresh preview install. Its model-facing `tool_result` contained one text copy. The native event recorded the matching `structuredContent` in diagnostic metadata outside that block.
+
+| Claude Code tool | Result | MCP result copies (chars) | Serialized `tool_result` (chars) |
+| --- | --- | ---: | ---: |
+| `agy_preflight` | `ok`, Hydrogen Low listed | 312 | 256 |
+| `agy_summarize_document` | `ok`, cap at line 4 and rollback gap at line 11 | 1,400 | 834 |
+| `agy_run_tests` | `failed`, exit 1, `test_relay.py::test_relay_contract` | 642 | 439 |
+| `agy_read_artifact` | `ok`, bounded excerpt for lines 20–25 | 600 | 404 |
+
 ## P1 — Prove savings and expand usage
 
 ### D07 — Publish a reproducible benchmark
 
 **Depends on D06.**
 
-- [ ] Compare the same long document, noisy failing tests, and a small-task control across native Claude Code and Codex, filtered local outputs where applicable, a lightweight native subagent where comparable, and bridge delegation. Record model, host, version, fixture, warm or cold run state, repetitions, and any account-specific settings that affect results.
-- [ ] Measure caller input and output through task completion, cache reads where available, AGY usage, model-visible response size, wall time, retries, and follow-up artifact reads. Grade document claims against expected facts and citations. Verify test results against raw exit status and failure identifiers.
-- [ ] Publish commands, synthetic fixtures, and observed results. Include workload sizes where delegation loses. Distinguish measured token counts from estimates and subscription or quota effects. Keep real repository content out of public fixtures.
+- [x] Compare the same long document, noisy failing tests, and a small-task control across native Claude Code and Codex, filtered outputs, native subagents for the document, and bridge delegation.
+- [x] Measure host input and output, cache reads, response size, wall time, and retries. Grade source claims and execution facts. Record AGY call counts and the limits of provider telemetry. The optional artifact read has separate D06 measurements.
+- [x] Publish the runner, synthetic fixtures, and observed results, including cases where delegation loses. [Benchmark and reproduction steps](DELEGATION_BENCHMARK.md)
 
 ### D08 — Run two independent jobs with predictable cleanup
 
 **Depends on D02.**
 
-- [ ] Keep reading MCP messages while jobs run and serialize protocol writes. Start with a configurable cap of two independent read-only jobs per server. Define bounded admission and a compact busy response. Isolate scratch state, prevent overlapping writes to one workspace, and serialize resumes of the same AGY conversation.
+- [x] Keep reading MCP messages while jobs run and serialize protocol writes. Cap independent read-only jobs at two by default with `--jobs 1` available. Bound admission to eight outstanding calls, serialize potential writes and same-conversation resumes, and give scoped document calls independent staging directories.
 - [ ] Wire cancellation, server shutdown, and hard and idle timeout behavior to owned child cleanup. Exercise the direct and PTY paths with process-tree fixtures on the Windows and POSIX platforms the feature will claim to support. Account for completion and cancellation races, and release slots after every terminal state.
-- [ ] Demonstrate overlapping execution and a responsive connection. Cancel a queued job and a running job, then verify independent work still completes. Check that child processes and job scratch files are gone where cleanup applies. Bound the combined amount returned for multi-job results.
+- [x] Demonstrate overlapping execution and a responsive connection. Windows stdio returned a ping within 0.56 s while both independent AGY jobs ran and returned the expected marker at 28.34 and 30.83 s. The deterministic lifecycle fixture cancels queued and running jobs while independent work completes. Each parallel response has its own cap and a server accepts at most two active callbacks.
 
 ### D09 — Surface quiet, observable progress
 
 **Depends on D08.**
 
-- [ ] Evaluate AGY `stream-json` against fixtures for step, result, error, and incomplete output. Prefer observed events on supported versions and define behavior for PTY and older CLI versions.
-- [ ] Use the client's `progressToken` when present. Rate-limit short status messages and omit raw command logs and model text deltas. Preserve the hard deadline independently of progress. Distinguish elapsed time from observed child activity.
-- [ ] Verify visible progress, timeout, and cancellation behavior in Claude Code and Codex during a slow task. Consider resumable background jobs only if synchronous calls still miss verified client deadlines.
+- [x] Evaluate AGY `stream-json` against fixtures for step, result, error, and incomplete output. Use observed steps in direct mode with AGY 1.5.18 or newer. PTY and older CLI versions report elapsed time.
+- [x] Use the client's `progressToken` and cap updates at one every five seconds. Send short messages for elapsed time and observed child activity. Keep hard deadlines independent of progress. Keep command output and model deltas out of notifications.
+- [ ] Verify interactive cancellation and visible rendering in both hosts. Claude Code and Codex print-mode smokes sent progress tokens and received five MCP notifications each. Both received the three-second bridge timeout result. Both also sent `notifications/cancelled` when a separate eight-second client deadline expired. The stdio lifecycle fixtures verify cleanup independently of native UI behavior.
 
 ### D10 — Add read-only Git and public-source research
 
 **Depends on D02 and D06.** Keep the two workflows independently shippable.
 
-- [ ] Git reports the verified revision, change counts, and a bounded excerpt for project-configured read-only operations. Test clean, dirty, and rename cases. Review and optional AGY synthesis use the chosen baseline and scope.
-- [ ] Research returns a bounded answer with cited URLs and unresolved gaps. Keep network access explicit, run without an attached workspace by default for public research, and treat retrieved content as data. Check source relevance and coverage on a reproducible public question.
+- [x] Git reports the verified revision, change counts, and a bounded excerpt for project-configured tracked diffs. Tests cover clean, dirty, rename, and scoped cases. Optional AGY synthesis receives the selected diff excerpt.
+- [x] Research returns a bounded answer with cited URLs and unresolved gaps. Network access is explicit and AGY runs in an empty directory without a workspace attachment. The Windows smoke checked both the symbolic branch ref and the detached-HEAD exit status against the official manual. [Git symbolic-ref](https://git-scm.com/docs/git-symbolic-ref)
 
 ## P2 — Expand based on observed demand
 
-- [ ] **D11 · Smarter routing.** Use D07 and the incoming laptop workflow study to define task thresholds, preferred model profiles, and optional routing. Keep users able to choose or override a model and routing policy. Test unavailable profiles and quota responses without silent model changes.
+- [ ] **D11 · Smarter routing.** Use D07 and the laptop workflow study to define task thresholds, preferred model profiles, and optional routing. D07 supports direct reads for small lookups and filters for known patterns. It shows no stable token break-even threshold for automatic routing. The existing model preflight accepts exact user choices and reports model unavailability or quota without silent substitution.
 - [ ] **D12 · Isolated writes.** Require a verified permission boundary, task-scoped worktree, caller-approved action scope, and a reviewable diff with test results. Test denied writes outside the boundary and interruption before advertising unattended writes. Keep push, merge, and publish under explicit caller control.
 - [ ] **D13 · Additional transports.** Consider HTTP or an OpenAI-compatible adapter when a named client cannot use stdio MCP or the CLI. Define the required protocol behavior, trust boundary, and client acceptance test before implementation.
 
 ## Next-session starting point
 
-Finish D06 in native Claude Code when inference is available. Verify the cited lines, the pytest exit code and failing ID, and the sizes of the results the model receives. Start D07 after those checks pass. The pytest worker-count project tracks a separate repository optimization.
+Finish the pending client and platform checks before claiming support for those combinations. D12 requires a verified isolation launcher and D13 requires a named client. The pytest worker-count project tracks a separate repository optimization.
