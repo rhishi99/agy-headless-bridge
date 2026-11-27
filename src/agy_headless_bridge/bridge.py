@@ -425,7 +425,10 @@ class _Liveness:
             self.control.check()
             if now - self.last_tick >= _PROGRESS_INTERVAL:
                 if self.control.on_status:
-                    message = "AGY activity observed" if self.last_step > self.last_tick else "Elapsed time"
+                    # Hosts render the message, not the progress number: put the seconds in it.
+                    seconds = f"{int(now - self.start)} s"
+                    message = (f"AGY activity observed, {seconds}" if self.last_step > self.last_tick
+                               else f"Elapsed {seconds}")
                     self.control.on_status(now - self.start, message)
                 if self.control.on_progress:
                     self.control.on_progress(now - self.start)
@@ -792,6 +795,9 @@ def _agy_version(path: str, prefix: tuple[str, ...] = (), *,
         out, _, status = _probe([*prefix, path, "--version"], 30, cancel)
         if status:
             out = ""
+    except (subprocess.TimeoutExpired, AgyTimeoutError):
+        # A slow start under load says nothing about the version: don't cache it.
+        raise AgyTimeoutError("agy --version exceeded its 30s timeout") from None
     except (OSError, subprocess.SubprocessError):
         out = ""
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
@@ -806,7 +812,10 @@ def _use_direct(path: str, prefix: tuple[str, ...] = (), *,
     if forced in ("direct", "pty"):
         return forced == "direct"
     kwargs = {"cancel": cancel} if cancel is not None else {}
-    return _agy_version(path, *([prefix] if prefix else []), **kwargs) >= MIN_DIRECT_VERSION
+    try:
+        return _agy_version(path, *([prefix] if prefix else []), **kwargs) >= MIN_DIRECT_VERSION
+    except AgyTimeoutError:
+        return False
 
 
 @dataclass

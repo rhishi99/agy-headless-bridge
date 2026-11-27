@@ -1,4 +1,5 @@
 import json
+import re
 import queue
 import sys
 import threading
@@ -274,7 +275,8 @@ def test_stream_progress_uses_observed_steps_and_keeps_final_result(monkeypatch)
                                on_status=lambda elapsed, message: progress.append((elapsed, message)))
     assert result.text == "final answer" and result.structured_output == {"value": 4}
     messages = [message for _, message in progress]
-    assert messages.count("AGY activity observed") == 1 and "Elapsed time" in messages
+    assert sum(m.startswith("AGY activity observed") for m in messages) == 1
+    assert all(re.search(r"\d+ s", m) for m in messages)  # hosts show the text, not the number
 
 
 @pytest.mark.parametrize("frame, message", [

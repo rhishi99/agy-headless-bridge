@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from agy_headless_bridge import bridge, mcp_server
+from agy_headless_bridge import _delegation, bridge, mcp_server
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "delegation"
@@ -34,6 +34,7 @@ def invoke(scope, name, *, structured=False, **arguments):
 @pytest.fixture
 def agy_catalog(monkeypatch):
     monkeypatch.setattr(bridge, "find_agy", lambda: "fake-agy")
+    monkeypatch.setattr(_delegation, "_HELP_OK", set())
     monkeypatch.setattr(bridge, "_agy_version", lambda *a, **kw: (1, 5, 18))
     monkeypatch.setattr(bridge, "_probe", lambda *a: ("  --json-schema\n", "", 0))
     monkeypatch.setattr(bridge, "list_models", lambda *a, **kw: {
@@ -116,6 +117,7 @@ def test_preflight_checks_preset_explicit_model_and_auth(agy_catalog, monkeypatc
     missing, _ = invoke(scope, "agy_preflight", model="unknown")
     assert missing["status"] == "model_unavailable" and missing["facts"]["model"] == "unknown"
     monkeypatch.setattr(bridge, "_probe", lambda *a: ("", "", 0))
+    _delegation._HELP_OK.clear()  # a different agy at the same path, as after an update
     assert invoke(scope, "agy_preflight")[0]["status"] == "incompatible"
     monkeypatch.setattr(bridge, "_probe", lambda *a: ("  --json-schema\n", "", 0))
 
@@ -141,6 +143,22 @@ def test_slow_startup_probe_is_not_reported_as_task_deadline(agy_catalog, monkey
     result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
     assert result["status"] == "timeout" and "startup" in result["summary"]
     assert budgets == [30]
+
+
+def test_startup_help_check_runs_once_per_agy(agy_catalog, monkeypatch, tmp_path):
+    probes = []
+
+    def probe(argv, timeout, cancel):
+        probes.append(argv)
+        return "  --json-schema\n", "", 0
+
+    monkeypatch.setattr(bridge, "_probe", probe)
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **k: bridge.AgyResult(json.dumps(
+        {"summary": "s", "gaps": [], "evidence": []})))
+    shutil.copy(FIXTURES / "relay.md", tmp_path)
+    for _ in range(2):
+        invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
+    assert len(probes) == 1
 
 
 def test_document_refuses_outside_paths_and_unverifiable_quotes(agy_catalog, monkeypatch, tmp_path):
