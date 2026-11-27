@@ -400,6 +400,11 @@ locally, with model summaries available on request for failures.
 `agy_inspect_media` answers questions about up to four workspace PNG images or MP4
 videos (64 MiB combined). Claims carry an image or timestamp locator. The
 bridge checks the file and locator format.
+Add `--enable-recipe ruff`, `npm-test` or `cargo-test` (repeatable) to approve more fixed `agy_run_tests` recipes.
+Add `--enable-code-search` to register `agy_find_code`, which locates code and returns
+file:line citations the bridge verified against the workspace. AGY can read every
+file in the selected scope (the whole workspace by default), including untracked
+files such as `.env`, so enable it only for workspaces whose contents may go to Google.
 
 The default response budget is 2,000 characters. See the
 [delegation guide](docs/DELEGATION.md) for client commands, exact options,

@@ -417,11 +417,14 @@ def main(argv: list[str] | None = None) -> int:
     add_guard_arguments(parser)
     parser.add_argument("--delegation-root", help="Workspace for the opt-in document and test tools")
     parser.add_argument("--enable-pytest", action="store_true", help="Approve the fixed local pytest recipe")
+    parser.add_argument("--enable-recipe", action="append", choices=("ruff", "npm-test", "cargo-test"),
+                        default=[], help="Approve a fixed local test recipe (repeatable)")
     parser.add_argument("--retain-delegation-artifacts", action="store_true", help="Allow temporary session artifacts")
     parser.add_argument("--enable-full-delegation-output", action="store_true", help="Enable the 8000-character output level")
     parser.add_argument("--jobs", type=int, choices=(1, 2), default=2, help="Maximum concurrent read-only jobs (default: 2)")
     parser.add_argument("--enable-git", action="store_true", help="Enable tracked Git diff inspection")
     parser.add_argument("--enable-public-research", action="store_true", help="Enable opt-in public web research")
+    parser.add_argument("--enable-code-search", action="store_true", help="Enable verified code search")
     args = parser.parse_args(argv)
     policy = {}
     delegation = None
@@ -439,15 +442,17 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--delegation-root cannot be combined with a guarded launch")
         try:
             delegation = DelegationSession(args.delegation_root, pytest_enabled=args.enable_pytest,
+                                           recipes=args.enable_recipe,
                                            retention=args.retain_delegation_artifacts,
                                            full=args.enable_full_delegation_output, git_enabled=args.enable_git,
-                                           research_enabled=args.enable_public_research)
+                                           research_enabled=args.enable_public_research,
+                                           code_search_enabled=args.enable_code_search)
         except (OSError, RuntimeError, ValueError):
             parser.error("--delegation-root must point to an existing directory")
         if not delegation.root.is_dir():
             parser.error("--delegation-root must point to an existing directory")
-    elif (args.enable_pytest or args.retain_delegation_artifacts or args.enable_full_delegation_output
-          or args.enable_git or args.enable_public_research):
+    elif (args.enable_pytest or args.enable_recipe or args.retain_delegation_artifacts or args.enable_full_delegation_output
+          or args.enable_git or args.enable_public_research or args.enable_code_search):
         parser.error("Delegation options require --delegation-root")
     lock = threading.Condition()
     pending: dict[int | str, _ToolJob] = {}

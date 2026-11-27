@@ -422,3 +422,274 @@ def test_media_rejects_combined_size_over_cap(agy_catalog, monkeypatch, tmp_path
 
 def test_inspect_media_runs_as_scoped_reader():
     assert mcp_server._job_scope({"name": "agy_inspect_media", "arguments": {}}) == (True, None)
+
+
+def test_document_accepts_log_traceback_and_invalid_utf8_and_rejects_exe(agy_catalog, monkeypatch, tmp_path):
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        '  File "app.py", line 12, in main\n'
+        "    run()\n"
+        "RuntimeError: boom\n"
+    )
+    (tmp_path / "build.log").write_text(traceback_text, encoding="utf-8")
+    (tmp_path / "bad.log").write_bytes(b"ok\n\xff\xfe bad\nERROR boom\n")
+    (tmp_path / "tool.exe").write_bytes(b"MZ\x90\x00")
+
+    def answer(prompt, **options):
+        if "build.log" in prompt:
+            structured = {
+                "summary": "Build failed with RuntimeError.",
+                "evidence": [{"path": "build.log", "start_line": 4, "end_line": 4, "quote": "RuntimeError: boom"}],
+                "gaps": [],
+            }
+        else:
+            staged, = options["add_dirs"]
+            text = (Path(staged) / "bad.log").read_text(encoding="utf-8")
+            assert text == "ok\n\ufffd\ufffd bad\nERROR boom\n"
+            structured = {
+                "summary": "Log recorded an error.",
+                "evidence": [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": text.splitlines()[1]}],
+                "gaps": [],
+            }
+        return bridge._finish(json.dumps({"status": "SUCCESS", "response": "", "structured_output": structured}), 0)
+
+    monkeypatch.setattr(bridge, "run_result", answer)
+
+    res_log, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["build.log"], question="Why did it fail?")
+    assert res_log["status"] == "ok"
+    assert res_log["evidence"] == [{"path": "build.log", "start_line": 4, "end_line": 4, "quote": "RuntimeError: boom"}]
+
+    res_bad, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["bad.log"], question="Any errors?")
+    assert res_bad["status"] == "ok"
+    assert res_bad["evidence"] == [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": "\ufffd\ufffd bad"}]
+
+    res_exe, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["tool.exe"], question="What is this?")
+    assert res_exe["status"] == "invalid_input"
+
+
+def test_changed_lines_parses_two_file_excerpt():
+    excerpt = (
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1,0 +5,2 @@\n"
+        "+x = 1\n"
+        "+y = 2\n"
+        "--- a/b.py\n"
+        "+++ b/b.py\n"
+        "@@ -3 +3 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3}}
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+def test_git_diff_review_verifies_findings_and_rejects_both_flags(tmp_path, agy_catalog, monkeypatch):
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    git("init")
+    (tmp_path / "app.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    git("add", "--", ".")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "Init")
+    (tmp_path / "app.py").write_text("a = 1\nb = 3\n", encoding="utf-8")
+    scope = session(tmp_path, git_enabled=True)
+
+    both, _ = invoke(scope, "agy_git_diff", summarize=True, review=True)
+    assert both["status"] == "invalid_input"
+
+    def review_agy(prompt, **options):
+        assert "Review this Git diff excerpt for bugs and risks." in prompt
+        assert options["extra_args"] == ["--json-schema", _delegation._REVIEW_SCHEMA]
+        return bridge.AgyResult("", structured_output={
+            "summary": "Potential bug on line 2.",
+            "findings": [
+                {"path": "app.py", "line": 2, "issue": "Changed value may overflow."},
+                {"path": "app.py", "line": 1, "issue": "Unchanged line finding."},
+            ],
+        })
+
+    monkeypatch.setattr(bridge, "run_result", review_agy)
+    result, _ = invoke(scope, "agy_git_diff", review=True)
+    assert result["model_status"] == "partial"
+    assert result["model_summary"] == "Potential bug on line 2."
+    assert result["findings"] == [{"path": "app.py", "line": 2, "issue": "Changed value may overflow."}]
+
+    (tmp_path / "app.py").write_text("a = 1\n" + "changed\n" * 8, encoding="utf-8")
+    findings = [{"path": "app.py", "line": line, "issue": "x" * 200} for line in range(2, 10)]
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: bridge.AgyResult(
+        "", structured_output={"summary": "Budgeted review.", "findings": findings}))
+    bounded, size = invoke(scope, "agy_git_diff", review=True, structured=True)
+    assert 0 < len(bounded["findings"]) < len(findings)
+    assert bounded["findings"] == findings[:len(bounded["findings"])]
+    assert bounded["model_status"] == "partial" and bounded["truncated"] and size <= 2000
+
+    (tmp_path / "app.py").write_text("a = 1\nfirst\n" + "x" * 1900 + "\nlast\n", encoding="utf-8")
+
+    def review_clipped(prompt, **options):
+        assert "+first\n" in prompt and "+last" not in prompt
+        return bridge.AgyResult("", structured_output={
+            "summary": "Clipped review.",
+            "findings": [{"path": "app.py", "line": line, "issue": "Issue."} for line in (2, 3, 4)],
+        })
+
+    monkeypatch.setattr(bridge, "run_result", review_clipped)
+    result, _ = invoke(scope, "agy_git_diff", review=True)
+    assert result["model_status"] == "partial" and result["truncated"]
+    assert [item["line"] for item in result["findings"]] == [2]
+
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: bridge.AgyResult(
+        "", structured_output={"summary": "Clipped review.", "findings": []}))
+    result, _ = invoke(scope, "agy_git_diff", review=True)
+    assert result["model_status"] == "partial" and result["truncated"]
+
+
+def _code_answer(monkeypatch, evidence, seen=None):
+    structured = {"summary": "Found it.", "gaps": [], "evidence": evidence}
+
+    def run(prompt, **options):
+        if seen is not None:
+            seen.update(options)
+        return bridge._finish(json.dumps({"status": "SUCCESS", "response": "",
+                                          "structured_output": structured}), 0)
+
+    monkeypatch.setattr(bridge, "run_result", run)
+
+
+def test_find_code_hidden_without_flag_and_listed_with_it(tmp_path):
+    assert "agy_find_code" not in {tool["name"] for tool in session(tmp_path).tools}
+    assert "agy_find_code" in {tool["name"] for tool in session(tmp_path, code_search_enabled=True).tools}
+
+
+def test_find_code_keeps_verified_and_drops_bad_citations(agy_catalog, monkeypatch, tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x = 1\ndef run():\n    return 2\n", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("secret = 1\n", encoding="utf-8")
+    good = {"path": "pkg/a.py", "start_line": 2, "end_line": 3, "quote": "def run():\n    return 2"}
+    seen = {}
+    (tmp_path / "sibling.py").write_text("secret = 2", encoding="utf-8")
+    sibling = {"path": "sibling.py", "start_line": 1, "end_line": 1, "quote": "secret = 2"}
+    _code_answer(monkeypatch, [good, sibling], seen)
+    scope = session(tmp_path, code_search_enabled=True)
+    result, _ = invoke(scope, "agy_find_code", question="Where is run?", paths=["pkg"])
+    assert result["status"] == "partial"
+    assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
+    assert not Path(seen["cwd"]).is_relative_to(tmp_path)
+    assert seen["mode"] == "plan" and seen["add_dirs"] == [str((tmp_path / "pkg").resolve())]
+    absolute = {**good, "path": str(tmp_path / "pkg" / "a.py")}
+    _code_answer(monkeypatch, [absolute, sibling], seen)
+    result, _ = invoke(scope, "agy_find_code", question="Where is run?")
+    assert result["status"] == "ok" and result["evidence"][0]["path"] == "pkg/a.py"
+    assert seen["cwd"] == str(tmp_path.resolve())
+    assert len(result["evidence"]) == 2
+    for bad in ({**good, "quote": "def nope():"}, {**good, "path": ".git/config", "start_line": 1,
+                "end_line": 1, "quote": "secret = 1"},
+                {**good, "path": str(tmp_path.parent / "x.py")}, {**good, "path": "../x.py"}):
+        _code_answer(monkeypatch, [good, bad])
+        result, _ = invoke(scope, "agy_find_code", question="Where is run?")
+        assert result["status"] == "partial" and len(result["evidence"]) == 1
+        assert "could not be verified" in json.dumps(result)
+
+
+def test_find_code_stages_only_the_selected_file(agy_catalog, monkeypatch, tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("chosen = 1", encoding="utf-8")
+    (pkg / "b.py").write_text("other = 2", encoding="utf-8")
+
+    def answer(prompt, **options):
+        scratch = Path(options["cwd"])
+        assert options["add_dirs"] == [str(scratch)]
+        assert (scratch / "pkg" / "a.py").read_text(encoding="utf-8") == "chosen = 1"
+        assert not (scratch / "pkg" / "b.py").exists()
+        return bridge.AgyResult("", structured_output={"summary": "Found it.", "gaps": [], "evidence": [
+            {"path": str(scratch / "pkg" / "a.py"), "start_line": 1, "end_line": 1, "quote": "chosen = 1"},
+            {"path": "pkg/b.py", "start_line": 1, "end_line": 1, "quote": "other = 2"},
+        ]})
+
+    monkeypatch.setattr(bridge, "run_result", answer)
+    result, _ = invoke(session(tmp_path, code_search_enabled=True), "agy_find_code",
+                       question="Where is it?", paths=["pkg/a.py"])
+    assert result["status"] == "partial"
+    assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
+
+
+def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tmp_path):
+    scope = session(tmp_path, code_search_enabled=True)
+    result, _ = invoke(scope, "agy_find_code", question="q", paths=["../x"])
+    assert result["status"] in {"denied", "invalid_input"}
+    result, _ = invoke(scope, "agy_find_code", question="q", paths=[".git"])
+    assert result["status"] in {"denied", "invalid_input"}
+
+    def quota(*args, **kwargs):
+        raise bridge.AgyQuotaError("quota reached", 1, "")
+
+    monkeypatch.setattr(bridge, "run_result", quota)
+    result, _ = invoke(scope, "agy_find_code", question="q")
+    assert result["status"] == "quota"
+
+
+def test_malformed_recipe_is_invalid_input(tmp_path):
+    result, size = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests",
+                          recipe=["ruff"], structured=True, max_chars=800)
+    assert result["status"] == "invalid_input"
+    assert size <= 800
+
+
+def test_unapproved_recipe_is_unknown(tmp_path):
+    scope = session(tmp_path, recipes={"ruff"})
+    result, _ = invoke(scope, "agy_run_tests", recipe="cargo-test")
+    assert result["status"] == "unknown_recipe"
+    assert result["summary"] == "Choose an approved test recipe."
+
+
+def test_recipe_lists_tests_tool_without_pytest(tmp_path):
+    tool = next(t for t in session(tmp_path, recipes={"ruff"}).tools if t["name"] == "agy_run_tests")
+    assert tool["inputSchema"]["properties"]["recipe"]["enum"] == ["ruff"]
+
+
+def test_ruff_recipe_reports_findings(tmp_path, monkeypatch):
+    def lint(argv, *args, **kwargs):
+        assert argv[-5:] == ["ruff", "check", "--output-format", "concise", "."]
+        return "a.py:1:8: F401 Imported but unused", 1
+
+    monkeypatch.setattr(bridge, "_run_direct", lint)
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
+    assert result["status"] == "failed"
+    assert result["facts"]["exit_code"] == 1
+    assert "F401" in result["excerpt"]
+
+
+def test_missing_runner_is_test_runner_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    result, _ = invoke(session(tmp_path, recipes={"npm-test"}), "agy_run_tests", recipe="npm-test")
+    assert result["status"] == "test_runner_error"
+
+
+def test_missing_ruff_is_runner_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: ("python: No module named ruff", 1))
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
+    assert result["status"] == "test_runner_error"
+
+
+def test_cargo_recipe_keeps_panic_details(tmp_path, monkeypatch):
+    output = ("running 1 test\ntests::addition --- FAILED\n\nfailures:\n\n"
+              "---- tests::addition stdout ----\n"
+              "thread 'tests::addition' panicked at src/lib.rs:10:5:\n"
+              "assertion `left == right` failed\n  left: 2\n right: 3\n\n"
+              "test result: FAILED. 0 passed; 1 failed\n"
+              "error: test failed, to rerun pass `--lib`\n")
+    monkeypatch.setattr(_delegation.shutil, "which", lambda _: "cargo")
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: (output, 101))
+    result, size = invoke(session(tmp_path, recipes={"cargo-test"}), "agy_run_tests",
+                          recipe="cargo-test", max_chars=800)
+    assert result["status"] == "failed" and size <= 800
+    assert "tests::addition" in result["excerpt"]
+    assert "assertion `left == right` failed" in result["excerpt"]
+
+
+def test_enable_recipe_requires_delegation_root():
+    with pytest.raises(SystemExit):
+        mcp_server.main(["--enable-recipe", "ruff"])
