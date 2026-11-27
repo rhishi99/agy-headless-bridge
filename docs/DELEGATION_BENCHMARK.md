@@ -45,4 +45,25 @@ A document passed only when it gave both expected quotes and line citations. Pyt
 
 The document and control bridge calls use AGY inference. The pytest calls in this benchmark used `summarize: false` and made zero AGY inference calls. The preview MCP payload exposes model ID and version for document calls. Provider-side AGY token counts per benchmark call were unavailable from these transcripts. The host token counts are telemetry and do not estimate cost or quota. The benchmark requested zero artifact reads. A separate native client smoke verified the optional artifact path with a 600-character MCP result budget. [Native smoke measurements](DELEGATION_BACKLOG.md#d06--package-native-onboarding-and-the-two-demos)
 
-Use a local read for a one-line lookup and a deterministic filter when the relevant pattern is known. The bridge remains useful for bounded evidence or observed pytest facts when the client lacks local shell access. These measurements cover one long document size and one noisy test size, so they do not establish an automatic routing threshold.
+Use a local read for a one-line lookup and a deterministic filter when the relevant pattern is known. The bridge remains useful for bounded evidence or observed pytest facts when the client lacks local shell access. The size sweep below extends the document workload for Claude.
+
+## Document size sweep (D11)
+
+On 27 Nov 2026, the runner ran with `--host claude --repetitions 1 --document-lines N` for N = 2000 and 8000, built from `main` at `d8519c8` with the same host and AGY versions. The 2000-line note is 161 KB and the 8000-line note is 647 KB. The 360-line row repeats the first repetition of the table above. Codex was not run.
+
+| Document lines | Full read | Filtered local | Native subagent | Bridge |
+| ---: | ---: | ---: | ---: | ---: |
+| 360 | 26,782 · pass | 18,286 · pass | 20,647 · pass | 29,489 · pass after retries |
+| 2,000 | 107,469 · pass | 17,760 · pass | 20,108 · pass | 19,088 · pass, 47.8 s |
+| 8,000 | 945,827 · pass, 14 reads | 17,760 · pass | 20,231 · fail | 18,847 · fail |
+
+Cells give caller input tokens and grading. At 8000 lines, the bridge rejected the note because it exceeds the 256 KiB combined source limit, and the caller reported the refusal rather than guessing. The subagent sampled the file and cited lines 3 and 10 instead of 4 and 11. The pytest and control rows matched the D07 ranges at both sizes, because those fixtures do not grow.
+
+Manual routing guidance from these runs:
+
+- A known pattern: use a deterministic filter. It cost about 18,000 tokens at every size.
+- A one-line or small file: read it directly. The bridge adds about 3,000 tokens of fixed overhead and 40–50 seconds of AGY latency.
+- An unknown structure between about 30 KB and 256 KiB: use the bridge or a native subagent. Each cost about 19,000–20,000 tokens at 2000 lines, against 107,000 for a full read. The subagent was faster. The bridge returned quotes and line numbers.
+- Over 256 KiB: filter first or split the document. The bridge refuses it, and the subagent's sampling missed the exact lines.
+
+The break-even point lies between 360 and 2000 lines, where the full read's payload exceeds the bridge's fixed overhead. A single repetition on one host does not support an automatic threshold.
