@@ -228,3 +228,23 @@ def test_mcp_research_plan_mode_allowed_without_opt_in(monkeypatch):
     monkeypatch.setattr(mcp_server, "run_result", _as_result(lambda p, **k: "ok"))
     assert "isError" not in _call("agy_ask", {"prompt": "x", "mode": "plan"})["result"]
     assert "isError" not in _call("agy_research", {"query": "q"})["result"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows-only")
+def test_windows_children_never_open_a_console_window(monkeypatch):
+    seen = []
+
+    class Done(Exception):
+        pass
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("creationflags", 0))
+        raise Done
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", spy)
+    monkeypatch.setattr(bridge.subprocess, "run", spy)
+    with pytest.raises(Done):
+        bridge._run_direct(["agy"], 1)
+    with pytest.raises(Done):
+        bridge._probe(["agy", "--version"], 1, None)
+    assert all(flags & bridge.subprocess.CREATE_NO_WINDOW for flags in seen) and len(seen) == 2

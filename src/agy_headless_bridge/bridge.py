@@ -58,6 +58,10 @@ from typing import Callable
 
 from ._guard import add_guard_arguments, guarded_command
 
+# A bridge launched without a console (MCP host, scheduler) must not flash one
+# per agy call; agy's own shell children inherit this hidden console too.
+_NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
 
 def check_seconds(value, name: str = "timeout") -> float:
     """A timeout as a finite float >= 1 s. Accepts numeric strings (some MCP
@@ -481,7 +485,7 @@ def _run_direct(
     group = bool(control and control.cancel is not None and sys.platform != "win32")
     proc = subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, start_new_session=group, env=env,
+        stderr=subprocess.STDOUT, start_new_session=group, env=env, **_NO_WINDOW,
         **({"cwd": cwd} if cwd is not None else {}),
     )
     if group:
@@ -764,7 +768,7 @@ def _probe(argv, timeout, cancel):
     if cancel is None:
         result = subprocess.run(
             argv, stdin=subprocess.DEVNULL, capture_output=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
+            encoding="utf-8", errors="replace", timeout=timeout, **_NO_WINDOW,
         )
         return result.stdout, getattr(result, "stderr", "") or "", result.returncode
     control = _RunControl(cancel, None)
