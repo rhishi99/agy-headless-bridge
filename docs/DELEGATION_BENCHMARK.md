@@ -49,7 +49,7 @@ Use a local read for a one-line lookup and a deterministic filter when the relev
 
 ## Document size sweep (D11)
 
-On 27 Nov 2026, the runner ran with `--host claude --repetitions 1 --document-lines N` for N = 2000 and 8000, built from `main` at `d8519c8` with the same host and AGY versions. The 2000-line note is 161 KB and the 8000-line note is 647 KB. The 360-line row repeats the first repetition of the table above. Codex was not run.
+On 27 Nov 2026, the runner ran with `--host claude --repetitions 1 --document-lines N` for N = 2000 and 8000, built from `main` at `d8519c8` with the same host and AGY versions. The 2000-line note is 161 KB and the 8000-line note is 647 KB. The 360-line row repeats the first repetition of the table above. The Codex rows below come from a separate run.
 
 | Document lines | Full read | Filtered local | Native subagent | Bridge |
 | ---: | ---: | ---: | ---: | ---: |
@@ -66,4 +66,25 @@ Manual routing guidance from these runs:
 - An unknown structure between about 30 KB and roughly 3,000 lines: use the bridge or a native subagent. Each cost about 19,000–20,000 tokens at 2000 lines, against 107,000 for a full read. The subagent was faster. The bridge returned quotes and line numbers.
 - Over roughly 3,000 lines: filter first or split the document. The bridge now accepts up to 4 MiB, but AGY samples line ranges past about 3,000 lines. A live 20,000-line check missed a fact at line 15,000 and reported the unread ranges as gaps. The subagent's sampling also missed the exact lines.
 
-The break-even point lies between 360 and 2000 lines, where the full read's payload exceeds the bridge's fixed overhead. A single repetition on one host does not support an automatic threshold.
+The break-even point lies between 360 and 2000 lines, where the full read's payload exceeds the bridge's fixed overhead.
+
+### Codex (two repetitions)
+
+Later on 27 Nov 2026, the runner ran with `--host codex --repetitions 1` twice at each size. It used `main` at `7f89dc2`, so the bridge accepted the 8000-line note under the 4 MiB cap. Cells give mean caller input tokens and the grade for each repetition.
+
+| Document lines | Full read | Filtered local | Native subagent | Bridge |
+| ---: | ---: | ---: | ---: | ---: |
+| 360 | 80,892 · pass, pass | 41,976 · pass, pass | 73,807 · pass, pass | 213,613 · pass, pass |
+| 2,000 | 113,568 · pass, pass | 41,993 · pass, pass | 73,814 · pass, pass | 140,471 · pass, pass |
+| 8,000 | 148,253 · pass, pass | 41,990 · pass, pass | 63,185 · pass, pass | 179,055 · fail, pass |
+
+Codex read only parts of the large notes, so its full read grows more slowly than Claude's. The bridge cost the most at every size, because Codex makes extra model round-trips around the MCP call. The 8000-line failure was a startup probe timeout on both attempts. The caller reported it instead of guessing.
+
+### Routing thresholds (D11)
+
+| Host | Under ~360 lines | ~2,000 lines | Over ~3,000 lines |
+| --- | --- | --- | --- |
+| Claude Code | read directly | bridge or native subagent | filter first, or split |
+| Codex | read directly or filter | filter or native subagent | filter or native subagent |
+
+A known pattern always goes to a filter. These are manual defaults from one Claude repetition and two Codex repetitions. They are not wired into automatic routing.

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-27
+
 ### Added
 
 - Scoped MCP document summaries with verified source quotes, a coverage gap list,
@@ -30,6 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   probe as the task deadline. The `--help` probe now has 30 seconds, and a probe
   timeout says the task never started. Concurrent cold starts hit the old
   10-second limit in the D07 Claude Code benchmark.
+- On Windows, direct-mode AGY runs and the version and help probes no longer
+  open a console window when the bridge has none (an MCP host or a scheduled
+  task). They start with `CREATE_NO_WINDOW`, and shell commands that AGY runs
+  share that hidden console.
 
 ## [1.4.0] — 2026-11-05
 
