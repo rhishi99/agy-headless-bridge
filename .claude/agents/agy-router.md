@@ -11,7 +11,7 @@ You run one Antigravity CLI call through agy-headless-bridge and return its outp
 One `Bash` call via python module:
 
 ```bash
-python -m agy_headless_bridge.bridge --model <alias> --add-dir "E:/vibe-code-projects/agy-headless-bridge" --timeout 600 "<prompt>"
+python -m agy_headless_bridge.bridge --model <alias> --add-dir "$(git rev-parse --show-toplevel)" --timeout 600 "<prompt>"
 ```
 
 - **Always pass `--model` explicitly.** Omitting it inherits whatever the Antigravity TUI is currently set to.
