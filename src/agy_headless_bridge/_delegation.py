@@ -43,7 +43,7 @@ def _tool(name, description, properties, required=()):
 
 
 PREFLIGHT = _tool("agy_preflight", "Check AGY CLI version, schema support and catalog model readiness.", _MODEL)
-DOCUMENT = _tool("agy_summarize_document", "Summarize scoped Markdown or text with verified source quotes.", {
+DOCUMENT = _tool("agy_summarize_document", "Summarize scoped Markdown, text or log files with verified source quotes.", {
     "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 4},
     "question": {"type": "string", "minLength": 1, "maxLength": 2000},
     **_MODEL, **_TIMEOUT, **_RETAIN,
@@ -327,8 +327,9 @@ class DelegationSession:
             if (not source.is_relative_to(self.root)
                     or {part.casefold() for part in source.relative_to(self.root).parts} & {".git", ".ssh"}):
                 raise PermissionError
-            if relative.suffix.lower() not in {".md", ".txt", ".markdown"} or not source.is_file():
-                raise ValueError("Use regular UTF-8 Markdown or text files within the workspace.")
+            suffix = relative.suffix.lower()
+            if suffix not in {".md", ".txt", ".markdown", ".log", ".out"} or not source.is_file():
+                raise ValueError("Use regular UTF-8 Markdown, text or log files within the workspace.")
             if relative.as_posix() in sources:
                 raise ValueError("Request each document once.")
             with source.open("rb") as file:
@@ -336,7 +337,8 @@ class DelegationSession:
             available -= len(data)
             if available < 0:
                 raise ValueError("Selected documents exceed the 4 MiB combined limit.")
-            lines = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            text = data.decode("utf-8-sig", errors="replace" if suffix in {".log", ".out"} else "strict")
+            lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
             target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
