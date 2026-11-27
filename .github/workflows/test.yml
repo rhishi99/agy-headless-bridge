@@ -18,7 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Ubuntu 24.04 has a setup-python build for Python 3.9.
+        os: [ubuntu-24.04, windows-latest]
         python-version: ["3.9", "3.12"]
 
     steps:
