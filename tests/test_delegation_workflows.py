@@ -564,3 +564,33 @@ def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tm
     monkeypatch.setattr(bridge, "run_result", quota)
     result, _ = invoke(scope, "agy_find_code", question="q")
     assert result["status"] == "quota"
+
+
+def test_unapproved_recipe_is_unknown(tmp_path):
+    scope = session(tmp_path, recipes={"ruff"})
+    result, _ = invoke(scope, "agy_run_tests", recipe="cargo-test")
+    assert result["status"] == "unknown_recipe"
+    assert result["summary"] == "Choose an approved test recipe."
+
+
+def test_recipe_lists_tests_tool_without_pytest(tmp_path):
+    assert "agy_run_tests" in [t["name"] for t in session(tmp_path, recipes={"ruff"}).tools]
+
+
+def test_ruff_recipe_reports_findings(tmp_path):
+    (tmp_path / "a.py").write_text("import os\n")
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
+    assert result["status"] == "failed"
+    assert result["facts"]["exit_code"] == 1
+    assert "F401" in result["excerpt"]
+
+
+def test_missing_runner_is_test_runner_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    result, _ = invoke(session(tmp_path, recipes={"npm-test"}), "agy_run_tests", recipe="npm-test")
+    assert result["status"] == "test_runner_error"
+
+
+def test_enable_recipe_requires_delegation_root():
+    with pytest.raises(SystemExit):
+        mcp_server.main(["--enable-recipe", "ruff"])
