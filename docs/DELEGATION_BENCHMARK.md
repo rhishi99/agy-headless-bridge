@@ -63,7 +63,7 @@ Manual routing guidance from these runs:
 
 - A known pattern: use a deterministic filter. It cost about 18,000 tokens at every size.
 - A one-line or small file: read it directly. The bridge adds about 3,000 tokens of fixed overhead and 40–50 seconds of AGY latency.
-- An unknown structure between about 30 KB and 256 KiB: use the bridge or a native subagent. Each cost about 19,000–20,000 tokens at 2000 lines, against 107,000 for a full read. The subagent was faster. The bridge returned quotes and line numbers.
-- Over 256 KiB: filter first or split the document. The bridge refuses it, and the subagent's sampling missed the exact lines.
+- An unknown structure between about 30 KB and roughly 3,000 lines: use the bridge or a native subagent. Each cost about 19,000–20,000 tokens at 2000 lines, against 107,000 for a full read. The subagent was faster. The bridge returned quotes and line numbers.
+- Over roughly 3,000 lines: filter first or split the document. The bridge now accepts up to 4 MiB, but AGY samples line ranges past about 3,000 lines. A live 20,000-line check missed a fact at line 15,000 and reported the unread ranges as gaps. The subagent's sampling also missed the exact lines.
 
 The break-even point lies between 360 and 2000 lines, where the full read's payload exceeds the bridge's fixed overhead. A single repetition on one host does not support an automatic threshold.

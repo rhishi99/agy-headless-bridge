@@ -18,7 +18,7 @@ from xml.etree import ElementTree
 from . import bridge
 
 HYDROGEN = "gemini-4-hydrogen-low"
-MAX_SOURCE_BYTES = 256 * 1024
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024
 ARTIFACT_TTL = 600
 LEVELS = {"summary": 2000, "standard": 4000, "full": 8000}
@@ -330,7 +330,7 @@ class DelegationSession:
                 data = file.read(available + 1)
             available -= len(data)
             if available < 0:
-                raise ValueError("Selected documents exceed the 256 KiB combined limit.")
+                raise ValueError("Selected documents exceed the 4 MiB combined limit.")
             lines = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n").split("\n")
             target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)

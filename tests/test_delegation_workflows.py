@@ -40,6 +40,22 @@ def agy_catalog(monkeypatch):
         "gemini-4-hydrogen-low": "Hydrogen Low", "custom-model": "Custom"})
 
 
+def test_document_cap_admits_megabyte_notes_and_rejects_over_4_mib(agy_catalog, monkeypatch, tmp_path):
+    quote = "The frame payload is capped at 65,536 bytes."
+    filler = "Synthetic relay node inventory entry padding text.\n"
+    (tmp_path / "big.md").write_text(filler * 15000 + quote + "\n", encoding="utf-8")
+    (tmp_path / "huge.md").write_text(filler * 90000, encoding="utf-8")
+    structured = {"summary": "Cap is 65,536 bytes.", "gaps": [],
+        "evidence": [{"path": "big.md", "start_line": 15001, "end_line": 15001, "quote": quote}]}
+    monkeypatch.setattr(bridge, "run_result", lambda prompt, **options: bridge._finish(
+        json.dumps({"status": "SUCCESS", "response": "", "structured_output": structured}), 0))
+
+    result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["big.md"], question="Cap?")
+    assert result["status"] == "ok" and result["evidence"][0]["start_line"] == 15001
+
+    result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["huge.md"], question="Cap?")
+    assert result["status"] != "ok" and "4 MiB" in json.dumps(result)
+
 def test_document_acceptance(agy_catalog, monkeypatch, tmp_path):
     shutil.copy(FIXTURES / "relay.md", tmp_path)
     quote = "The frame payload is capped at 65,536 bytes."
