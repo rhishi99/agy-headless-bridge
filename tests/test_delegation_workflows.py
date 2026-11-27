@@ -566,6 +566,13 @@ def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tm
     assert result["status"] == "quota"
 
 
+def test_malformed_recipe_is_invalid_input(tmp_path):
+    result, size = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests",
+                          recipe=["ruff"], structured=True, max_chars=800)
+    assert result["status"] == "invalid_input"
+    assert size <= 800
+
+
 def test_unapproved_recipe_is_unknown(tmp_path):
     scope = session(tmp_path, recipes={"ruff"})
     result, _ = invoke(scope, "agy_run_tests", recipe="cargo-test")

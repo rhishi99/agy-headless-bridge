@@ -684,6 +684,8 @@ class DelegationSession:
 
     def tests(self, args, options, cap):
         recipe = args.get("recipe")
+        if not isinstance(recipe, str):
+            return _result("invalid_input", "Provide a recipe name as a string.")
         if recipe not in self.recipes:
             return _result("unknown_recipe", "Choose an approved test recipe.")
         name = recipe.capitalize() if recipe == "pytest" else recipe
