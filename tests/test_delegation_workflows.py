@@ -504,15 +504,21 @@ def test_find_code_keeps_verified_and_drops_bad_citations(agy_catalog, monkeypat
     (tmp_path / ".git" / "config").write_text("secret = 1\n", encoding="utf-8")
     good = {"path": "pkg/a.py", "start_line": 2, "end_line": 3, "quote": "def run():\n    return 2"}
     seen = {}
-    _code_answer(monkeypatch, [good], seen)
+    (tmp_path / "sibling.py").write_text("secret = 2", encoding="utf-8")
+    sibling = {"path": "sibling.py", "start_line": 1, "end_line": 1, "quote": "secret = 2"}
+    _code_answer(monkeypatch, [good, sibling], seen)
     scope = session(tmp_path, code_search_enabled=True)
     result, _ = invoke(scope, "agy_find_code", question="Where is run?", paths=["pkg"])
-    assert result["status"] == "ok" and result["evidence"][0]["path"] == "pkg/a.py"
+    assert result["status"] == "partial"
+    assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
+    assert not Path(seen["cwd"]).is_relative_to(tmp_path)
     assert seen["mode"] == "plan" and seen["add_dirs"] == [str((tmp_path / "pkg").resolve())]
     absolute = {**good, "path": str(tmp_path / "pkg" / "a.py")}
-    _code_answer(monkeypatch, [absolute])
+    _code_answer(monkeypatch, [absolute, sibling], seen)
     result, _ = invoke(scope, "agy_find_code", question="Where is run?")
     assert result["status"] == "ok" and result["evidence"][0]["path"] == "pkg/a.py"
+    assert seen["cwd"] == str(tmp_path.resolve())
+    assert len(result["evidence"]) == 2
     for bad in ({**good, "quote": "def nope():"}, {**good, "path": ".git/config", "start_line": 1,
                 "end_line": 1, "quote": "secret = 1"},
                 {**good, "path": str(tmp_path.parent / "x.py")}, {**good, "path": "../x.py"}):
@@ -520,6 +526,29 @@ def test_find_code_keeps_verified_and_drops_bad_citations(agy_catalog, monkeypat
         result, _ = invoke(scope, "agy_find_code", question="Where is run?")
         assert result["status"] == "partial" and len(result["evidence"]) == 1
         assert "could not be verified" in json.dumps(result)
+
+
+def test_find_code_stages_only_the_selected_file(agy_catalog, monkeypatch, tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("chosen = 1", encoding="utf-8")
+    (pkg / "b.py").write_text("other = 2", encoding="utf-8")
+
+    def answer(prompt, **options):
+        scratch = Path(options["cwd"])
+        assert options["add_dirs"] == [str(scratch)]
+        assert (scratch / "pkg" / "a.py").read_text(encoding="utf-8") == "chosen = 1"
+        assert not (scratch / "pkg" / "b.py").exists()
+        return bridge.AgyResult("", structured_output={"summary": "Found it.", "gaps": [], "evidence": [
+            {"path": str(scratch / "pkg" / "a.py"), "start_line": 1, "end_line": 1, "quote": "chosen = 1"},
+            {"path": "pkg/b.py", "start_line": 1, "end_line": 1, "quote": "other = 2"},
+        ]})
+
+    monkeypatch.setattr(bridge, "run_result", answer)
+    result, _ = invoke(session(tmp_path, code_search_enabled=True), "agy_find_code",
+                       question="Where is it?", paths=["pkg/a.py"])
+    assert result["status"] == "partial"
+    assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
 
 
 def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tmp_path):

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import subprocess
@@ -11,8 +10,10 @@ import sys
 import tempfile
 import threading
 import time
-from uuid import uuid4
+from contextlib import nullcontext
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
+from uuid import uuid4
 from xml.etree import ElementTree
 
 from . import bridge
@@ -397,7 +398,7 @@ class DelegationSession:
             raise ValueError("Provide a question between 1 and 2000 characters.")
         timeout, model = self._timeout(args), self._model(args)
         try:
-            scope = [str(self._guard(path)) for path in paths] or [str(self.root)]
+            scope = [self._guard(path) for path in paths] or [self.root]
         except PermissionError:
             return _result("denied", "The path is outside the authorized scope or access was denied.")
         except OSError:
@@ -411,9 +412,22 @@ class DelegationSession:
                   "exact verbatim quotes with workspace-relative path and one-based line ranges, and gaps.\n"
                   f"Paths: {_json(paths or ['.'])}\nQuestion: {question}")
         try:
-            agy = bridge.run_result(prompt, agy_path=cli, add_dirs=scope, cwd=str(self.root), model=model,
-                                    mode="plan", timeout=timeout, **options,
-                                    extra_args=["--json-schema", _DOCUMENT_SCHEMA])
+            working_dir = tempfile.TemporaryDirectory(prefix="agy-code-") if paths else nullcontext(str(self.root))
+            with working_dir as cwd:
+                attachments = [str(path) for path in scope if path.is_dir()]
+                for selected, source in zip(paths, scope):
+                    if source.is_dir():
+                        continue
+                    if not source.is_file():
+                        return _result("document_unavailable", "Select regular files or directories.", facts=facts)
+                    target = Path(cwd) / selected.replace("\\", "/")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                    if cwd not in attachments:
+                        attachments.append(cwd)
+                agy = bridge.run_result(prompt, agy_path=cli, add_dirs=attachments, cwd=cwd,
+                                        model=model, mode="plan", timeout=timeout, **options,
+                                        extra_args=["--json-schema", _DOCUMENT_SCHEMA])
         except _AGY_ERRORS as exc:
             return _model_error(exc, facts)
         if agy.denied:
@@ -428,8 +442,11 @@ class DelegationSession:
                 raw = ref["path"].replace("\\", "/")
                 relative = Path(raw)
                 if relative.is_absolute():
-                    relative = relative.relative_to(self.root)
+                    origin = Path(cwd) if relative.is_relative_to(cwd) else self.root
+                    relative = relative.relative_to(origin)
                 source = self._guard(relative.as_posix())
+                if not any(source.is_relative_to(path) for path in scope):
+                    continue
                 with source.open("rb") as file:
                     data = file.read(MAX_SOURCE_BYTES)
             except (KeyError, TypeError, AttributeError, ValueError, PermissionError, OSError, RuntimeError):
