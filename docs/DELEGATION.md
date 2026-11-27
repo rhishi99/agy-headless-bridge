@@ -51,8 +51,10 @@ Open a new client session and confirm it lists `agy_preflight`, `agy_summarize_d
 
 ### What the tools can access
 
-- `--delegation-root` authorizes this MCP connection to select Markdown or text files under that directory. The bridge copies up to four UTF-8 files and 4 MiB total into a temporary attachment. The selected content goes to the AGY service under your AGY account. Choose files you can share with that service.
+- `--delegation-root` authorizes this MCP connection to select Markdown, text, `.log` or `.out` files under that directory. Log files with invalid UTF-8 are staged with replacement characters. The bridge copies up to four UTF-8 files and 4 MiB total into a temporary attachment. The selected content goes to the AGY service under your AGY account. Choose files you can share with that service.
 - AGY reads about 3,000 lines per document call. Notes up to roughly 2,000–3,000 lines are read in full. For larger notes AGY samples line ranges, so a fact outside those ranges can be missed. In testing, AGY listed the unread ranges under gaps. Split very large notes or ask a focused question.
+- `agy_inspect_media` copies up to four PNG or MP4 files, 64 MiB total, into a temporary attachment for AGY. Each claim carries an image or timestamp locator; the bridge checks the file and locator format, not the claim itself.
+- `--enable-recipe ruff`, `npm-test` or `cargo-test` (repeatable) approves more fixed `agy_run_tests` recipes. The tool schema lists only the recipes you enabled.
 - `--enable-pytest` approves `python -m pytest` with fixed report arguments in that workspace. Project tests, fixtures, and plugins execute locally with your user's permissions and may write caches or build outputs. Enable this on a workspace whose tests you trust.
 - The delegation tools use a trusted local MCP connection. AGY plan mode is a CLI setting. This registration is incompatible with the bridge's guarded launcher flags.
 - Omit `--enable-pytest` or `--retain-delegation-artifacts` when you only need document summaries. Existing general-purpose AGY tools retain their own workspace and permission settings.
@@ -95,6 +97,8 @@ Clients can request MCP progress notifications with a `progressToken`. The bridg
 
 ## Opt in to Git inspection and public research
 
-Enable `--enable-git` on a trusted Git worktree to register `agy_git_diff`. Choose a local `baseline` such as `HEAD` or a commit ID and optionally pass relative `paths`. The tool returns the verified HEAD and baseline, counts of tracked changes including renames, and a bounded diff excerpt. It omits untracked files and submodule internals. Git uses the worktree's local filters. Set `summarize: true` to send the excerpt to AGY for analysis. When the response needs trimming, the bridge shortens the excerpt before trimming the requested analysis.
+Enable `--enable-git` on a trusted Git worktree to register `agy_git_diff`. Choose a local `baseline` such as `HEAD` or a commit ID and optionally pass relative `paths`. The tool returns the verified HEAD and baseline, counts of tracked changes including renames, and a bounded diff excerpt. It omits untracked files and submodule internals. Git uses the worktree's local filters. Set `summarize: true` to send the excerpt to AGY for analysis. When the response needs trimming, the bridge shortens the excerpt before trimming the requested analysis. Set `review: true` instead to get findings tied to changed lines; the bridge keeps only findings on complete added lines in the excerpt it sent.
+
+Enable `--enable-code-search` to register `agy_find_code`. Pass a `question` and optional relative `paths` (up to eight). AGY can read every file in the selected scope, the whole workspace by default, including untracked files such as `.env`. The bridge verifies each returned `file:line` citation against the workspace and drops citations outside the selected scope. Enable it only for workspaces whose contents may go to Google.
 
 Enable `--enable-public-research` to register `agy_public_research`. Pass a `question` and `network: true` per call. AGY starts in a disposable directory with no workspace attachment and receives instructions to read public sources. The result reports source URLs, the claims they support, and gaps. The bridge checks the shape of the URLs. Check the cited pages to verify claims.

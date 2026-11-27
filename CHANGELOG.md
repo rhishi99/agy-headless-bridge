@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-28
+
+### Added
+
+- `agy_summarize_document` accepts `.log` and `.out` files; invalid UTF-8
+  bytes are staged and verified as replacement characters.
+- `agy_git_diff` takes `review: true` for findings tied to complete added
+  lines in the sent excerpt, kept within the response budget.
+- `agy_find_code` (`--enable-code-search`) locates code and returns
+  `file:line` citations verified against the selected scope.
+- `--enable-recipe ruff`, `npm-test` and `cargo-test` add fixed
+  `agy_run_tests` recipes. The schema lists only enabled recipes.
+- `agy_inspect_media` answers questions about up to four PNG or MP4 files
+  (64 MiB combined) with image or timestamp locators. It runs alongside
+  other read-only jobs.
+
+### Fixed
+
+- Stream progress reports observed AGY activity reliably on Windows, where
+  the coarse monotonic clock could hide a step.
+
 ## [1.5.1] — 2026-11-27
 
 ### Fixed
@@ -257,7 +278,8 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.0...v1.5.1
 [1.2.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.1
 [1.2.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.0
