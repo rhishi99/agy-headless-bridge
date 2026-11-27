@@ -451,6 +451,15 @@ def test_git_diff_review_verifies_findings_and_rejects_both_flags(tmp_path, agy_
     assert result["model_summary"] == "Potential bug on line 2."
     assert result["findings"] == [{"path": "app.py", "line": 2, "issue": "Changed value may overflow."}]
 
+    (tmp_path / "app.py").write_text("a = 1\n" + "changed\n" * 8, encoding="utf-8")
+    findings = [{"path": "app.py", "line": line, "issue": "x" * 200} for line in range(2, 10)]
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: bridge.AgyResult(
+        "", structured_output={"summary": "Budgeted review.", "findings": findings}))
+    bounded, size = invoke(scope, "agy_git_diff", review=True, structured=True)
+    assert 0 < len(bounded["findings"]) < len(findings)
+    assert bounded["findings"] == findings[:len(bounded["findings"])]
+    assert bounded["model_status"] == "partial" and bounded["truncated"] and size <= 2000
+
     (tmp_path / "app.py").write_text("a = 1\nfirst\n" + "x" * 1900 + "\nlast\n", encoding="utf-8")
 
     def review_clipped(prompt, **options):

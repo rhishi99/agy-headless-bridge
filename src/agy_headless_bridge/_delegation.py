@@ -244,12 +244,14 @@ def _present(result, cap, structured, *, prefer_model_summary=False):
     if len(message) > budget:
         result["truncated"] = True
         excerpt_fields = ("excerpt", "model_summary") if prefer_model_summary else ("model_summary", "excerpt")
-        for field in (*excerpt_fields, "evidence", "gaps", "model", "model_status",
+        for field in (*excerpt_fields, "evidence", "gaps", "findings", "model", "model_status",
                       "summary", "artifact_status", "artifact_id"):
             if field not in result or len(_json(result)) <= budget:
                 continue
             value = result[field]
             if isinstance(value, list):
+                if field == "findings" and value:
+                    result["model_status"] = "partial"
                 while value and len(_json(result)) > budget:
                     value.pop()
             elif field not in {"model_summary", "excerpt", "summary"}:
