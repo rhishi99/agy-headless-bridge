@@ -378,9 +378,12 @@ def test_document_accepts_log_traceback_and_invalid_utf8_and_rejects_exe(agy_cat
                 "gaps": [],
             }
         else:
+            staged, = options["add_dirs"]
+            text = (Path(staged) / "bad.log").read_text(encoding="utf-8")
+            assert text == "ok\n\ufffd\ufffd bad\nERROR boom\n"
             structured = {
                 "summary": "Log recorded an error.",
-                "evidence": [{"path": "bad.log", "start_line": 3, "end_line": 3, "quote": "ERROR boom"}],
+                "evidence": [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": text.splitlines()[1]}],
                 "gaps": [],
             }
         return bridge._finish(json.dumps({"status": "SUCCESS", "response": "", "structured_output": structured}), 0)
@@ -393,7 +396,7 @@ def test_document_accepts_log_traceback_and_invalid_utf8_and_rejects_exe(agy_cat
 
     res_bad, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["bad.log"], question="Any errors?")
     assert res_bad["status"] == "ok"
-    assert res_bad["evidence"] == [{"path": "bad.log", "start_line": 3, "end_line": 3, "quote": "ERROR boom"}]
+    assert res_bad["evidence"] == [{"path": "bad.log", "start_line": 2, "end_line": 2, "quote": "\ufffd\ufffd bad"}]
 
     res_exe, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["tool.exe"], question="What is this?")
     assert res_exe["status"] == "invalid_input"

@@ -337,12 +337,13 @@ class DelegationSession:
             available -= len(data)
             if available < 0:
                 raise ValueError("Selected documents exceed the 4 MiB combined limit.")
-            text = data.decode("utf-8-sig", errors="replace" if suffix in {".log", ".out"} else "strict")
-            lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            is_log = suffix in {".log", ".out"}
+            text = data.decode("utf-8-sig", errors="replace" if is_log else "strict")
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
             target = folder / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            sources[relative.as_posix()] = lines
+            target.write_bytes(text.encode("utf-8") if is_log else data)
+            sources[relative.as_posix()] = text.split("\n")
         return sources
 
     def document(self, args, options, cap):
