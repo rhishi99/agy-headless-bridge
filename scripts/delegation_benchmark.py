@@ -28,12 +28,12 @@ CASES = [
 ]
 
 
-def stage(workspace):
+def stage(workspace, document_lines=360):
     workspace.mkdir()
     relay = (FIXTURES / "relay.md").read_text(encoding="utf-8")
     details = "".join(
         f"- Synthetic relay node {i:03d} reports normal queue depth after its routine check.\n"
-        for i in range(360)
+        for i in range(document_lines)
     )
     (workspace / "relay.md").write_text(relay + "\n## Node inventory\n" + details, encoding="utf-8")
     (workspace / "heartbeat.txt").write_text("The heartbeat interval is 15 seconds.\n", encoding="utf-8")
@@ -120,11 +120,11 @@ def summarize(host, rows):
                                                            for r in results if r is not None], "reply": reply}
 
 
-def run_case(root, server, python, codex, case):
+def run_case(root, server, python, codex, case, document_lines=360):
     repetition, host, (task, variant) = case
     label = f"{repetition}-{host}-{task}-{variant}"
     workspace = root / label
-    stage(workspace)
+    stage(workspace, document_lines=document_lines)
     cmd = command(host, task, variant, server, workspace, codex) + [task_prompt(task, variant, python, host)]
     started = time.monotonic()
     with (root / f"{label}.jsonl").open("wb") as stdout, (root / f"{label}.stderr").open("wb") as stderr:
@@ -140,7 +140,7 @@ def run_case(root, server, python, codex, case):
             rows.append(json.loads(line))
         except json.JSONDecodeError:
             continue
-    return {"case": label, "exit": exit_code, "seconds": elapsed, **summarize(host, rows)}
+    return {"case": label, "document_lines": document_lines, "exit": exit_code, "seconds": elapsed, **summarize(host, rows)}
 
 
 def main():
@@ -152,13 +152,16 @@ def main():
     parser.add_argument("--host", choices=("claude", "codex", "both"), default="both")
     parser.add_argument("--repetitions", type=int, default=2)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--document-lines", type=int, default=360)
     args = parser.parse_args()
+    if args.document_lines < 0:
+        parser.error("--document-lines must be >= 0")
     root = args.output.resolve()
     root.mkdir()
     hosts = ("claude", "codex") if args.host == "both" else (args.host,)
     cases = itertools.product(range(1, 1 + args.repetitions), hosts, CASES)
     with (root / "metrics.jsonl").open("w", encoding="utf-8") as metrics, ThreadPoolExecutor(max_workers=args.workers) as pool:
-        for result in pool.map(lambda case: run_case(root, args.server.resolve(), args.python.resolve(), args.codex, case), cases):
+        for result in pool.map(lambda case: run_case(root, args.server.resolve(), args.python.resolve(), args.codex, case, args.document_lines), cases):
             line = json.dumps(result)
             print(line, file=metrics, flush=True)
             print(line, flush=True)
