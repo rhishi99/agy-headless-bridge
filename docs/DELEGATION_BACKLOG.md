@@ -65,7 +65,7 @@ flowchart LR
 - [x] Document version-pinned Codex and Claude Code registrations, trusted-project settings, preflight, and two demo prompts. Bundle a Claude Code skill that calls MCP directly.
 - [x] Smoke test a fresh install, tool discovery, the Markdown summary, and the noisy failing test in native Codex. Record model-visible response sizes and results.
 - [x] Run both demos in native Claude Code and record model-visible response sizes and results.
-- [ ] Release gate for the first slice is green offline tests plus the documented client smokes. Any public claim about measured token savings depends on D07.
+- [x] Pass the offline suite and the documented native client smokes. GitHub Actions reported 165 passes and one live AGY skip per job on Windows and Ubuntu with Python 3.9 and 3.12. Any public claim about measured token savings depends on D07. [GitHub Actions run](https://github.com/rhishi99/agy-headless-bridge/actions/runs/45932527047)
 
 The Windows smoke used Codex CLI 0.172.0 with `gpt-6.2-sol`, AGY 1.5.18, and a freshly installed local preview wheel with package metadata `1.4.0`. Only the synthetic fixtures were in the delegation workspace. The document call used `gemini-4-hydrogen-low`. Preflight queried the catalog, and pytest and artifact retrieval ran locally.
 
@@ -102,7 +102,7 @@ Claude Code 2.1.332 with `claude-haiku-5-5` ran the same fixtures on Windows fro
 **Depends on D02.**
 
 - [x] Keep reading MCP messages while jobs run and serialize protocol writes. Cap independent read-only jobs at two by default with `--jobs 1` available. Bound admission to eight outstanding calls, serialize potential writes and same-conversation resumes, and give scoped document calls independent staging directories.
-- [ ] Wire cancellation, server shutdown, and hard and idle timeout behavior to owned child cleanup. Exercise the direct and PTY paths with process-tree fixtures on the Windows and POSIX platforms the feature will claim to support. Account for completion and cancellation races, and release slots after every terminal state.
+- [x] Wire cancellation, server shutdown, and hard and idle timeout behavior to owned child cleanup. The direct and PTY process-tree fixtures passed on Windows and Ubuntu. The lifecycle fixtures cover completion and cancellation races and slot release after terminal states. [GitHub Actions run](https://github.com/rhishi99/agy-headless-bridge/actions/runs/45932527047)
 - [x] Demonstrate overlapping execution and a responsive connection. Windows stdio returned a ping within 0.56 s while both independent AGY jobs ran and returned the expected marker at 28.34 and 30.83 s. The deterministic lifecycle fixture cancels queued and running jobs while independent work completes. Each parallel response has its own cap and a server accepts at most two active callbacks.
 
 ### D09 — Surface quiet, observable progress
