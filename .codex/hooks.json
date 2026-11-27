@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"[CONTEXT WARNING] Approaching auto-compact threshold (~80% context used). Commit progress, write obsidian-memory/logs/handoff-<date>.md, start a fresh session.\"}'"
+          }
+        ]
+      }
+    ]
+  }
+}
