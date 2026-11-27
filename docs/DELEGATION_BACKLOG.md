@@ -43,7 +43,7 @@ flowchart LR
 - [x] Use AGY `--json-schema` for summaries, references, and gaps. Verify paths and verbatim quotes against staged files. Return bounded partial or error results when output or references are unavailable.
 - [x] Pass the offline D01 document fixture and the Windows stdio smoke with AGY 1.5.18. Hydrogen Low returned the frame cap at line 4 and the rollback gap. Both serialized representations totaled 1,246 characters.
 - [x] Run the synthetic document in both native hosts on Windows during D06.
-- [ ] Verify document reads against native, authenticated AGY on POSIX. WSL passed the offline workflow fixtures.
+- [x] Verify document reads against native, authenticated AGY on POSIX. On 27 Nov 2026, WSL Ubuntu (Linux 6.18) with native AGY 1.5.18 and Hydrogen Low answered the D01 document over stdio in 24.8 s: frame cap at line 4 and the rollback gap at line 11, both quotes verified.
 
 ### D04 — Run configured tests and preserve execution facts
 
@@ -130,4 +130,4 @@ Claude Code 2.1.332 with `claude-haiku-5-5` ran the same fixtures on Windows fro
 
 ## Next-session starting point
 
-D03 POSIX remains open: it needs an authenticated native AGY on Linux or macOS. WSL has no `agy` CLI installed. D12 requires a verified isolation launcher and D13 requires a named client. The pytest worker-count project tracks a separate repository optimization.
+D12 requires a verified isolation launcher and D13 requires a named client. The pytest worker-count project tracks a separate repository optimization.
