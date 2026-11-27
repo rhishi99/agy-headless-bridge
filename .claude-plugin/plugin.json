@@ -1,6 +1,6 @@
 {
   "name": "agy-headless-bridge",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Run Google's Antigravity CLI headlessly and delegate scoped document summaries or local pytest runs from Claude Code.",
   "author": {
     "name": "rhishi99",

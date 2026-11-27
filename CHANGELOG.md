@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-27
+
 ### Added
 
 - Scoped MCP document summaries with verified source quotes, a coverage gap list,
