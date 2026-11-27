@@ -373,40 +373,39 @@ def _media_answer(evidence, seen=None):
 def test_media_keeps_located_claims_and_stages_only_selected_files(agy_catalog, monkeypatch, tmp_path):
     (tmp_path / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
     (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n")
-    (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4")
     (tmp_path / "other.mp4").write_bytes(b"x")
     seen = []
     evidence = [{"path": "clip.mp4", "locator": "00:01-00:02", "claim": "Shows 49."},
-                {"path": "shot.png", "locator": "image", "claim": "Dark frame."},
-                {"path": "spec.pdf", "locator": "page 3", "claim": "Cap is 4 MiB."}]
+                {"path": "shot.png", "locator": "image", "claim": "Dark frame."}]
     monkeypatch.setattr(bridge, "run_result", _media_answer(evidence, seen))
     result, _ = invoke(session(tmp_path), "agy_inspect_media", structured=True,
-                       paths=["clip.mp4", "shot.png", "spec.pdf"], question="What happens?")
+                       paths=["clip.mp4", "shot.png"], question="What happens?")
     assert result["status"] == "ok" and result["summary_source"] == "model"
     assert result["evidence"] == evidence
-    assert seen == [["clip.mp4", "shot.png", "spec.pdf"]]
+    assert seen == [["clip.mp4", "shot.png"]]
 
 
 def test_media_drops_unstaged_paths_and_wrong_locator_kinds(agy_catalog, monkeypatch, tmp_path):
     (tmp_path / "clip.mp4").write_bytes(b"x")
-    (tmp_path / "spec.pdf").write_bytes(b"x")
+    (tmp_path / "shot.png").write_bytes(b"x")
     evidence = [{"path": "clip.mp4", "locator": "page 2", "claim": "Wrong kind."},
-                {"path": "spec.pdf", "locator": "01:00", "claim": "Wrong kind."},
+                {"path": "shot.png", "locator": "01:00", "claim": "Wrong kind."},
                 {"path": "secret.mp4", "locator": "00:01", "claim": "Not staged."},
                 {"path": "clip.mp4", "locator": "00:75", "claim": "Bad seconds."},
                 {"path": "clip.mp4", "locator": "1:05", "claim": "Kept."}]
     monkeypatch.setattr(bridge, "run_result", _media_answer(evidence))
-    result, _ = invoke(session(tmp_path), "agy_inspect_media", paths=["clip.mp4", "spec.pdf"], question="Q?")
+    result, _ = invoke(session(tmp_path), "agy_inspect_media", paths=["clip.mp4", "shot.png"], question="Q?")
     assert result["status"] == "partial"
     assert result["evidence"] == [{"path": "clip.mp4", "locator": "1:05", "claim": "Kept."}]
     assert "could not be checked" in result["gaps"][0]
 
 
 @pytest.mark.parametrize("name,status", [("notes.md", "invalid_input"), ("run.exe", "invalid_input"),
-                                         ("../up.mp4", "denied"), (".git/x.png", "denied")])
+                                         ("spec.pdf", "invalid_input"), ("../up.mp4", "denied"), (".git/x.png", "denied")])
 def test_media_rejects_unsupported_or_outside_paths(agy_catalog, monkeypatch, tmp_path, name, status):
     (tmp_path / "notes.md").write_text("x", encoding="utf-8")
     (tmp_path / "run.exe").write_bytes(b"x")
+    (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4")
     monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: pytest.fail("Unexpected inference"))
     assert invoke(session(tmp_path), "agy_inspect_media", paths=[name], question="Q?")[0]["status"] == status
 
