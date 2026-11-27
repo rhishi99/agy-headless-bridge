@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A slow `agy --version` start under load is reported as a startup timeout
+  and retried on the next call, instead of being cached as an incompatible AGY.
+- Delegation preflight checks `agy --help` once per process, so concurrent
+  calls no longer pay an extra cold AGY start each.
+- Progress messages carry the elapsed seconds (`Elapsed 20 s`), because
+  interactive hosts show the message text but not the progress number.
+
 ## [1.5.0] — 2026-11-27
 
 ### Added
@@ -246,7 +255,7 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.0...HEAD
 [1.2.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.1
 [1.2.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.0
 [1.1.0]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.1.0

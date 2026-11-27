@@ -113,6 +113,9 @@ def _model_error(exc, facts):
 _AGY_ERRORS = (bridge.AgyExitError, bridge.AgyNotFoundError, OSError, subprocess.SubprocessError, ValueError)
 
 
+_HELP_OK = set()  # agy paths whose --help lists --json-schema; spares a cold start per call
+
+
 def _preflight(model, cancel):
     facts = {"model": model}
     path = bridge.find_agy()
@@ -123,10 +126,12 @@ def _preflight(model, cancel):
         facts["agy_version"] = ".".join(map(str, version)) or None
         if version < bridge.MIN_DIRECT_VERSION:
             return _result("incompatible", "Update AGY to a version with direct JSON output.", facts=facts), None
-        out, err, code = bridge._probe([path, "--help"], 30, cancel)
-        bridge._check_exit(out + "\n" + err, code)
-        if "--json-schema" not in out + err:
-            return _result("incompatible", "Update AGY to a version with --json-schema.", facts=facts), None
+        if path not in _HELP_OK:
+            out, err, code = bridge._probe([path, "--help"], 30, cancel)
+            bridge._check_exit(out + "\n" + err, code)
+            if "--json-schema" not in out + err:
+                return _result("incompatible", "Update AGY to a version with --json-schema.", facts=facts), None
+            _HELP_OK.add(path)
         if model not in bridge.list_models(path, cancel=cancel):
             return _result("model_unavailable", "Select an exact model ID from agy models.", facts=facts), None
     except (bridge.AgyTimeoutError, subprocess.TimeoutExpired):

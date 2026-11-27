@@ -3,6 +3,7 @@ write-denial detection and the MCP mode gate. No agy needed: stubs stand in."""
 
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -118,6 +119,18 @@ def test_agy_version_parses_and_survives_missing_binary(tmp_path):
         exe.chmod(0o755)
     assert real(str(exe)) == (1, 5, 0)
     assert real(str(tmp_path / "missing")) == ()
+
+
+def test_version_probe_timeout_is_not_cached_or_read_as_old_agy(monkeypatch):
+    def slow(argv, timeout, cancel):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(bridge, "_probe", slow)
+    monkeypatch.setattr(bridge, "_agy_version", REAL_AGY_VERSION)
+    with pytest.raises(bridge.AgyTimeoutError):
+        bridge._agy_version("slow-agy")
+    assert ("slow-agy",) not in bridge._version_cache
+    assert not bridge._use_direct("slow-agy")  # run path still falls back to pty
 
 
 # --- direct runner with a stub agy ----------------------------------------------
