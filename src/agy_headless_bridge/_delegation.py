@@ -355,16 +355,8 @@ class DelegationSession:
         sources = {}
         available = MAX_SOURCE_BYTES
         for path in paths:
-            if not isinstance(path, str) or not 1 <= len(path) <= 240:
-                raise ValueError("Provide workspace-relative document paths up to 240 characters.")
+            source = self._guard(path)
             relative = Path(path.replace("\\", "/"))
-            if (relative.is_absolute() or PureWindowsPath(path).anchor or ":" in path or ".." in relative.parts
-                    or {part.casefold() for part in relative.parts} & {".git", ".ssh"}):
-                raise PermissionError
-            source = (self.root / relative).resolve(strict=True)
-            if (not source.is_relative_to(self.root)
-                    or {part.casefold() for part in source.relative_to(self.root).parts} & {".git", ".ssh"}):
-                raise PermissionError
             suffix = relative.suffix.lower()
             if suffix not in {".md", ".txt", ".markdown", ".log", ".out"} or not source.is_file():
                 raise ValueError("Use regular UTF-8 Markdown, text or log files within the workspace.")
