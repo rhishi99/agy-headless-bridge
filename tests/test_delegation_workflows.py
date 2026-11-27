@@ -581,7 +581,8 @@ def test_unapproved_recipe_is_unknown(tmp_path):
 
 
 def test_recipe_lists_tests_tool_without_pytest(tmp_path):
-    assert "agy_run_tests" in [t["name"] for t in session(tmp_path, recipes={"ruff"}).tools]
+    tool = next(t for t in session(tmp_path, recipes={"ruff"}).tools if t["name"] == "agy_run_tests")
+    assert tool["inputSchema"]["properties"]["recipe"]["enum"] == ["ruff"]
 
 
 def test_ruff_recipe_reports_findings(tmp_path, monkeypatch):

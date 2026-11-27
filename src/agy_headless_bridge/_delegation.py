@@ -54,11 +54,12 @@ _RECIPES = {
     "npm-test": lambda: [shutil.which("npm"), "test", "--silent"],
     "cargo-test": lambda: [shutil.which("cargo"), "test", "-q"],
 }
-TESTS = _tool("agy_run_tests", "Run an approved local test recipe and return observed test results.", {
-    "recipe": {"type": "string", "enum": ["pytest", *_RECIPES]},
-    "summarize": {"type": "boolean", "description": "Ask AGY to summarize a failing excerpt."},
-    **_MODEL, **_TIMEOUT, **_RETAIN,
-}, ("recipe",))
+def _tests_tool(recipes):
+    return _tool("agy_run_tests", "Run an approved local test recipe and return observed test results.", {
+        "recipe": {"type": "string", "enum": sorted(recipes)},
+        "summarize": {"type": "boolean", "description": "Ask AGY to summarize a failing excerpt."},
+        **_MODEL, **_TIMEOUT, **_RETAIN,
+    }, ("recipe",))
 ARTIFACT = _tool("agy_read_artifact", "Read a bounded line range of a session-owned artifact.", {
     "artifact_id": {"type": "string"}, "start_line": _LINE, "end_line": _LINE,
 }, ("artifact_id",))
@@ -306,7 +307,7 @@ class DelegationSession:
         self.retention = retention
         self.artifacts = {}
         self._artifact_lock = threading.Lock()
-        self.tools = [PREFLIGHT, DOCUMENT, *([TESTS] if self.recipes else []),
+        self.tools = [PREFLIGHT, DOCUMENT, *([_tests_tool(self.recipes)] if self.recipes else []),
                       *([ARTIFACT] if retention else []), *([GIT_DIFF] if git_enabled else []),
                       *([PUBLIC_RESEARCH] if research_enabled else []),
                       *([FIND_CODE] if code_search_enabled else [])]
