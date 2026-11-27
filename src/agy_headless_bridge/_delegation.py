@@ -380,11 +380,13 @@ class DelegationSession:
             result = _result("unusable_model_output", "AGY did not return a usable document summary.", facts=facts)
         else:
             references = _verified_citations(answer["evidence"], sources, Path(scratch))
-            gaps = [item[:240] for item in answer["gaps"][:5] if isinstance(item, str) and item.strip()]
+            def unstage(text):
+                return re.sub(r"[^\s\"'`(]*agy-delegation-[^\s/\\]+[/\\]", "", text)
+            gaps = [unstage(item)[:240] for item in answer["gaps"][:5] if isinstance(item, str) and item.strip()]
             unverified = not references or len(references) != len(answer["evidence"])
             if unverified:
                 gaps.insert(0, "One or more source references could not be verified.")
-            result = _result("partial" if unverified else "ok", answer["summary"][:min(800, cap // 6)], facts=facts,
+            result = _result("partial" if unverified else "ok", unstage(answer["summary"])[:min(800, cap // 6)], facts=facts,
                              evidence=references, gaps=gaps, summary_source="model")
         return self._retain(args, result, agy.text)
 

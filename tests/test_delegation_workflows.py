@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import sys
@@ -339,3 +339,21 @@ def test_public_research_requires_network_opt_in_and_keeps_public_citations(agy_
     assert [item["claim"] for item in result["evidence"]] == ["HEAD is a symbolic ref.", "Detached HEAD exits 1."]
     assert len(result["summary"]) <= 120
     assert "Detached HEAD is outside the question." in result["gaps"]
+
+
+def test_document_summary_hides_staging_directory(agy_catalog, monkeypatch, tmp_path):
+    shutil.copy(FIXTURES / "relay.md", tmp_path)
+    quote = "The frame payload is capped at 65,536 bytes."
+
+    def answer(prompt, **options):
+        staged, = options["add_dirs"]
+        structured = {"summary": f"{Path(staged).as_posix()}/relay.md caps frames; see {PureWindowsPath(staged, 'relay.md')}.",
+            "evidence": [{"path": "relay.md", "start_line": 4, "end_line": 4, "quote": quote}],
+            "gaps": [f"Rollback in {Path(staged).as_posix()}/relay.md is unspecified."]}
+        return bridge._finish(json.dumps({"status": "SUCCESS", "response": "",
+                                          "structured_output": structured}), 0)
+
+    monkeypatch.setattr(bridge, "run_result", answer)
+    result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
+    assert result["summary"] == "relay.md caps frames; see relay.md."
+    assert result["gaps"] == ["Rollback in relay.md is unspecified."]
