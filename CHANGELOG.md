@@ -24,6 +24,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An external isolation launcher interface and a checker for its write policy.
   Guarded execution requires a verified launcher configured by the operator.
 
+### Fixed
+
+- Delegated document, Git and research calls no longer report a slow AGY startup
+  probe as the task deadline. The `--help` probe now has 30 seconds, and a probe
+  timeout says the task never started. Concurrent cold starts hit the old
+  10-second limit in the D07 Claude Code benchmark.
+
 ## [1.4.0] — 2026-11-05
 
 ### Added

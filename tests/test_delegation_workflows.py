@@ -112,6 +112,21 @@ def test_preflight_checks_preset_explicit_model_and_auth(agy_catalog, monkeypatc
     assert result["facts"]["model"] == "gemini-4-hydrogen-low"
 
 
+def test_slow_startup_probe_is_not_reported_as_task_deadline(agy_catalog, monkeypatch, tmp_path):
+    budgets = []
+
+    def slow(argv, timeout, cancel):
+        budgets.append(timeout)
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(bridge, "_probe", slow)
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: pytest.fail("task started"))
+    shutil.copy(FIXTURES / "relay.md", tmp_path)
+    result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
+    assert result["status"] == "timeout" and "startup" in result["summary"]
+    assert budgets == [30]
+
+
 def test_document_refuses_outside_paths_and_unverifiable_quotes(agy_catalog, monkeypatch, tmp_path):
     root = tmp_path / "root"
     root.mkdir()
