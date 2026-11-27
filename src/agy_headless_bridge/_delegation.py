@@ -704,6 +704,8 @@ class DelegationSession:
                                                        cwd=str(self.root), capture_limit=MAX_ARTIFACT_BYTES)
                 control.check()
                 status = "ok" if exit_code == 0 else "failed"
+                if recipe == "ruff" and exit_code == 1 and output.strip().endswith(": No module named ruff"):
+                    status = "test_runner_error"
             except bridge.AgyTimeoutError as exc:
                 status, output = "timeout", exc.partial
             except OSError:

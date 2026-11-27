@@ -577,8 +577,12 @@ def test_recipe_lists_tests_tool_without_pytest(tmp_path):
     assert "agy_run_tests" in [t["name"] for t in session(tmp_path, recipes={"ruff"}).tools]
 
 
-def test_ruff_recipe_reports_findings(tmp_path):
-    (tmp_path / "a.py").write_text("import os\n")
+def test_ruff_recipe_reports_findings(tmp_path, monkeypatch):
+    def lint(argv, *args, **kwargs):
+        assert argv[-5:] == ["ruff", "check", "--output-format", "concise", "."]
+        return "a.py:1:8: F401 Imported but unused", 1
+
+    monkeypatch.setattr(bridge, "_run_direct", lint)
     result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
     assert result["status"] == "failed"
     assert result["facts"]["exit_code"] == 1
@@ -588,6 +592,12 @@ def test_ruff_recipe_reports_findings(tmp_path):
 def test_missing_runner_is_test_runner_error(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     result, _ = invoke(session(tmp_path, recipes={"npm-test"}), "agy_run_tests", recipe="npm-test")
+    assert result["status"] == "test_runner_error"
+
+
+def test_missing_ruff_is_runner_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "_run_direct", lambda *a, **kw: ("python: No module named ruff", 1))
+    result, _ = invoke(session(tmp_path, recipes={"ruff"}), "agy_run_tests", recipe="ruff")
     assert result["status"] == "test_runner_error"
 
 
