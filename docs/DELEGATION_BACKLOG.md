@@ -125,8 +125,7 @@ Claude Code 2.1.332 with `claude-haiku-5-5` ran the same fixtures on Windows fro
 ## P2 — Expand based on observed demand
 
 - [x] **D11 · Smarter routing.** Use D07 and the laptop workflow study to define task thresholds, preferred model profiles, and optional routing. D07 supports direct reads for small lookups and filters for known patterns. The Claude size sweep puts the document break-even point between 360 and 2000 lines and showed the bridge refusing documents over 256 KiB. The cap is now 4 MiB; AGY reads about 3,000 lines per call and samples beyond that, reporting unread ranges as gaps. [Size sweep](DELEGATION_BENCHMARK.md#document-size-sweep-d11) The Codex sweep (two repetitions) found the bridge costlier than a filter or native subagent at every size, so Codex should not route documents to the bridge. Manual thresholds per host are in the [routing table](DELEGATION_BENCHMARK.md#routing-thresholds-d11). Closed with manual thresholds: the two hosts reach opposite verdicts for the same task, so the calling host chooses and the bridge does not route automatically. The existing model preflight accepts exact user choices and reports model unavailability or quota without silent substitution.
-- [ ] **D12 · Isolated writes.** Require a verified permission boundary, task-scoped worktree, caller-approved action scope, and a reviewable diff with test results. Test denied writes outside the boundary and interruption before advertising unattended writes. Keep push, merge, and publish under explicit caller control.
 
 ## Next-session starting point
 
-D12 requires a verified isolation launcher. The pytest worker-count project tracks a separate repository optimization.
+All delegation items D01–D11 are closed. The pytest worker-count project tracks a separate repository optimization.
