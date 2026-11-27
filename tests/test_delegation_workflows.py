@@ -418,3 +418,7 @@ def test_media_rejects_combined_size_over_cap(agy_catalog, monkeypatch, tmp_path
     monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: pytest.fail("Unexpected inference"))
     result, _ = invoke(session(tmp_path), "agy_inspect_media", paths=["a.mp4", "b.mp4"], question="Q?")
     assert result["status"] == "invalid_input" and "MiB" in result["summary"]
+
+
+def test_inspect_media_runs_as_scoped_reader():
+    assert mcp_server._job_scope({"name": "agy_inspect_media", "arguments": {}}) == (True, None)
