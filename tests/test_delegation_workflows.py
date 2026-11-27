@@ -357,3 +357,64 @@ def test_document_summary_hides_staging_directory(agy_catalog, monkeypatch, tmp_
     result, _ = invoke(session(tmp_path), "agy_summarize_document", paths=["relay.md"], question="Cap?")
     assert result["summary"] == "relay.md caps frames; see relay.md."
     assert result["gaps"] == ["Rollback in relay.md is unspecified."]
+
+
+def _media_answer(evidence, seen=None):
+    def answer(prompt, **options):
+        assert options["mode"] == "plan" and "--json-schema" in options["extra_args"]
+        if seen is not None:
+            seen.append(sorted(p.name for p in Path(options["add_dirs"][0]).iterdir()))
+        structured = {"summary": "A counter counts up.", "evidence": evidence, "gaps": []}
+        return bridge._finish(json.dumps({"status": "SUCCESS", "response": "",
+                                          "structured_output": structured}), 0)
+    return answer
+
+
+def test_media_keeps_located_claims_and_stages_only_selected_files(agy_catalog, monkeypatch, tmp_path):
+    (tmp_path / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n")
+    (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "other.mp4").write_bytes(b"x")
+    seen = []
+    evidence = [{"path": "clip.mp4", "locator": "00:01-00:02", "claim": "Shows 49."},
+                {"path": "shot.png", "locator": "image", "claim": "Dark frame."},
+                {"path": "spec.pdf", "locator": "page 3", "claim": "Cap is 4 MiB."}]
+    monkeypatch.setattr(bridge, "run_result", _media_answer(evidence, seen))
+    result, _ = invoke(session(tmp_path), "agy_inspect_media", structured=True,
+                       paths=["clip.mp4", "shot.png", "spec.pdf"], question="What happens?")
+    assert result["status"] == "ok" and result["summary_source"] == "model"
+    assert result["evidence"] == evidence
+    assert seen == [["clip.mp4", "shot.png", "spec.pdf"]]
+
+
+def test_media_drops_unstaged_paths_and_wrong_locator_kinds(agy_catalog, monkeypatch, tmp_path):
+    (tmp_path / "clip.mp4").write_bytes(b"x")
+    (tmp_path / "spec.pdf").write_bytes(b"x")
+    evidence = [{"path": "clip.mp4", "locator": "page 2", "claim": "Wrong kind."},
+                {"path": "spec.pdf", "locator": "01:00", "claim": "Wrong kind."},
+                {"path": "secret.mp4", "locator": "00:01", "claim": "Not staged."},
+                {"path": "clip.mp4", "locator": "00:75", "claim": "Bad seconds."},
+                {"path": "clip.mp4", "locator": "1:05", "claim": "Kept."}]
+    monkeypatch.setattr(bridge, "run_result", _media_answer(evidence))
+    result, _ = invoke(session(tmp_path), "agy_inspect_media", paths=["clip.mp4", "spec.pdf"], question="Q?")
+    assert result["status"] == "partial"
+    assert result["evidence"] == [{"path": "clip.mp4", "locator": "1:05", "claim": "Kept."}]
+    assert "could not be checked" in result["gaps"][0]
+
+
+@pytest.mark.parametrize("name,status", [("notes.md", "invalid_input"), ("run.exe", "invalid_input"),
+                                         ("../up.mp4", "denied"), (".git/x.png", "denied")])
+def test_media_rejects_unsupported_or_outside_paths(agy_catalog, monkeypatch, tmp_path, name, status):
+    (tmp_path / "notes.md").write_text("x", encoding="utf-8")
+    (tmp_path / "run.exe").write_bytes(b"x")
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: pytest.fail("Unexpected inference"))
+    assert invoke(session(tmp_path), "agy_inspect_media", paths=[name], question="Q?")[0]["status"] == status
+
+
+def test_media_rejects_combined_size_over_cap(agy_catalog, monkeypatch, tmp_path):
+    monkeypatch.setattr(_delegation, "MAX_MEDIA_BYTES", 10)
+    (tmp_path / "a.mp4").write_bytes(b"x" * 6)
+    (tmp_path / "b.mp4").write_bytes(b"x" * 6)
+    monkeypatch.setattr(bridge, "run_result", lambda *a, **kw: pytest.fail("Unexpected inference"))
+    result, _ = invoke(session(tmp_path), "agy_inspect_media", paths=["a.mp4", "b.mp4"], question="Q?")
+    assert result["status"] == "invalid_input" and "MiB" in result["summary"]

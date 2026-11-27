@@ -397,6 +397,9 @@ Start `agy-mcp-server --delegation-root /absolute/workspace` to opt in to
 fixed local test recipe and `--retain-delegation-artifacts` for bounded
 log excerpts. Document summaries use the selected AGY model. Pytest runs
 locally, with model summaries available on request for failures.
+`agy_inspect_media` answers questions about up to four workspace images, PDFs,
+audio or video files (64 MiB combined). Claims carry a `page N`, `mm:ss` or
+`image` locator; the bridge checks the file and locator format, not the claim.
 
 The default response budget is 2,000 characters. See the
 [delegation guide](docs/DELEGATION.md) for client commands, exact options,
