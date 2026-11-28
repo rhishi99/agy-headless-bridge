@@ -232,6 +232,8 @@ def _changed_lines(excerpt):
         elif match:
             number = int(match[1])
             remaining = int(match[2]) if match[2] is not None else 1
+            if not remaining and current is not None:  # deletion only: accept the lines either side
+                changed.setdefault(current, set()).update((number, number + 1))
         elif remaining and line.startswith(("+", " ")):
             if current is not None and line.startswith("+"):
                 changed.setdefault(current, set()).add(number)

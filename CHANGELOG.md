@@ -11,6 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `agy_find_code` lists the files in scope (up to 300; hidden folders, `node_modules` and `__pycache__` skipped) in its
   prompt. Live AGY 1.5.18 plan mode can only read exact paths, so a whole-workspace
   search previously returned `partial` with no citations.
+- `agy_git_diff` review keeps findings on the lines either side of a deleted
+  block. The excerpt has no context lines, so risks from removed code (such as a
+  dropped guard) were always discarded.
 
 ## [1.6.0] — 2026-11-28
 

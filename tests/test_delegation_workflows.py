@@ -479,8 +479,12 @@ def test_changed_lines_parses_two_file_excerpt():
         "@@ -3 +3 @@\n"
         "-old\n"
         "+new\n"
+        "@@ -8,2 +7,0 @@\n"
+        "-guard\n"
+        "-check\n"
     )
-    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3}}
+    # A deletion-only hunk has no added line; AGY cites the lines either side of the gap.
+    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3, 7, 8}}
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
