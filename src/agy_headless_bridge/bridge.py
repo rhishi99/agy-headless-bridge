@@ -1007,7 +1007,7 @@ def _tail(path: str | None, n: int = 5) -> str:
         return ""
 
 
-def run_result(
+def _run_once(
     prompt: str,
     timeout: float | None = None,
     agy_path: str | None = None,
@@ -1137,6 +1137,44 @@ def run_result(
         if folder:
             shutil.rmtree(folder, ignore_errors=True)
     return res
+
+
+# Opt-in shell command run once when agy's quota is spent (e.g. an account
+# swap); exit 0 means "retry", and the run is retried once. Its output is
+# discarded so it can never corrupt the MCP stdio stream. Parallel runs that
+# hit the quota together share one hook run (one account swap, not two).
+ON_QUOTA_ENV = "AGY_BRIDGE_ON_QUOTA"
+_hook_lock = threading.Lock()
+_hook_swaps = 0  # successful hook runs, so a run can tell a swap happened
+
+
+def run_result(prompt: str, *args, **kwargs) -> AgyResult:
+    global _hook_swaps
+    swaps = _hook_swaps
+    try:
+        return _run_once(prompt, *args, **kwargs)
+    except AgyQuotaError:
+        hook = os.environ.get(ON_QUOTA_ENV, "").strip()
+        if not hook:
+            raise
+        with _hook_lock:
+            if _hook_swaps == swaps:  # no swap since this run began
+                try:
+                    ok = subprocess.run(
+                        hook, shell=True, check=False, timeout=120, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_NO_WINDOW,
+                    ).returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    ok = False
+                if not ok:
+                    raise
+                _hook_swaps += 1
+    return _run_once(prompt, *args, **kwargs)
+
+
+run_result.__doc__ = _run_once.__doc__ + (
+    f"\n\n    ${ON_QUOTA_ENV}, if set, is run once on AgyQuotaError; exit 0 retries once.")
+run_result.__wrapped__ = _run_once  # inspect.signature shows the real parameters
 
 
 def run(prompt: str, timeout: float | None = None, agy_path: str | None = None,

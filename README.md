@@ -550,6 +550,7 @@ echo "$ANSWER"
 | `AGY_BRIDGE_IDLE_TIMEOUT` | `300` | Kill after this many seconds of no output from agy (a caller's `timeout` overrides it) |
 | `AGY_BRIDGE_MAX_CHARS` | `4000` | MCP server: cap on returned text; `0` = no cap |
 | `AGY_BRIDGE_ALLOW_SKIP_PERMISSIONS` | unset | Set to `1` on the MCP server to allow the `skip_permissions` tool argument |
+| `AGY_BRIDGE_ON_QUOTA` | unset | Shell command run once when agy's quota is spent (e.g. `agy-swap next --family gemini`); exit `0` retries the run once (with its own timeout). Parallel runs share one hook run. Output is discarded |
 
 ---
 
