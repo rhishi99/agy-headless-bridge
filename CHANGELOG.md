@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `agy_find_code` lists the files in scope (up to 300, `.git` excluded) in its
+- `agy_find_code` lists the files in scope (up to 300; hidden folders, `node_modules` and `__pycache__` skipped) in its
   prompt. Live AGY 1.5.18 plan mode can only read exact paths, so a whole-workspace
   search previously returned `partial` with no citations.
 

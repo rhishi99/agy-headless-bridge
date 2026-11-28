@@ -633,6 +633,24 @@ def test_find_code_prompt_lists_scope_files(agy_catalog, monkeypatch, tmp_path):
     assert "pkg/a.py" in seen[0] and ".git" not in seen[0]
 
 
+def test_find_code_file_list_skips_dependency_dirs(agy_catalog, monkeypatch, tmp_path):
+    # node_modules/.venv sort before src and would fill the 300-file cap.
+    for folder in ("node_modules/lib", ".venv/lib", "pkg/__pycache__"):
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "junk.py").write_text("y = 2", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1", encoding="utf-8")
+    seen = []
+
+    def run(prompt, **options):
+        seen.append(prompt)
+        return bridge.AgyResult("", structured_output={"summary": "None.", "gaps": [], "evidence": []})
+
+    monkeypatch.setattr(bridge, "run_result", run)
+    invoke(session(tmp_path, code_search_enabled=True), "agy_find_code", question="Where is x?")
+    assert "src/app.py" in seen[0] and "junk.py" not in seen[0]
+
+
 def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tmp_path):
     scope = session(tmp_path, code_search_enabled=True)
     result, _ = invoke(scope, "agy_find_code", question="q", paths=["../x"])
