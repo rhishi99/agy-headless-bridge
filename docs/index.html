@@ -179,7 +179,7 @@ AGY inference calls: 0</pre>
       <thead><tr><th>Tool</th><th>Server flag</th><th>Returns</th></tr></thead>
       <tbody>
         <tr><td><code>agy_summarize_document</code></td><td><code>--delegation-root</code></td><td>Answers over Markdown, text, <code>.log</code> and <code>.out</code> files, with quotes checked against the cited lines</td></tr>
-        <tr><td><code>agy_git_diff</code> with <code>review: true</code></td><td><code>--enable-git</code></td><td>Review findings tied to added lines the bridge confirmed in the diff</td></tr>
+        <tr><td><code>agy_git_diff</code> with <code>review: true</code></td><td><code>--enable-git</code></td><td>Review findings tied to changed lines (added, or beside a deletion) the bridge confirmed in the diff</td></tr>
         <tr><td><code>agy_find_code</code></td><td><code>--enable-code-search</code></td><td><code>file:line</code> citations verified against the workspace</td></tr>
         <tr><td><code>agy_run_tests</code> recipes</td><td><code>--enable-recipe ruff|npm-test|cargo-test</code></td><td>Exit code and a bounded failure excerpt, run locally with no model call</td></tr>
         <tr><td><code>agy_inspect_media</code></td><td><code>--delegation-root</code></td><td>Answers about up to four PNG or MP4 files, each claim with an image or timestamp locator</td></tr>
@@ -362,7 +362,7 @@ scope where it was defined.</pre>
   <span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"id"</span>: 2,
   <span class="s">"result"</span>: { <span class="s">"content"</span>: [ { <span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"&lt;agy's cleaned answer&gt;"</span> } ] }
 }</pre>
-    <p style="color:var(--mut);font-size:14px">Both tools take one required <code>string</code> arg — <code>agy_ask(prompt)</code>, <code>agy_research(query)</code>. On failure the <code>text</code> is an <code>[agy-mcp] ERROR: …</code> string, not a JSON-RPC error, so the agent always gets a readable reply.</p>
+    <p style="color:var(--mut);font-size:14px"><code>agy_ask</code> and <code>agy_research</code> each take one required <code>string</code> arg — <code>agy_ask(prompt)</code>, <code>agy_research(query)</code>. On failure the <code>text</code> is an <code>[agy-mcp] ERROR: …</code> string, not a JSON-RPC error, so the agent always gets a readable reply.</p>
 
     <h3>Troubleshooting</h3>
     <table>
@@ -467,7 +467,7 @@ agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
     <h3>As an MCP server (Claude Code, etc.)</h3>
     <pre><span class="k">claude</span> mcp add --transport stdio antigravity -- \
     python -m agy_headless_bridge.mcp_server</pre>
-    <p style="color:var(--mut);font-size:14px;margin-top:8px">Exposes two tools — <code>agy_ask</code> and <code>agy_research</code> — so your agent can delegate work to Antigravity / Gemini.</p>
+    <p style="color:var(--mut);font-size:14px;margin-top:8px">Exposes <code>agy_ask</code> and <code>agy_research</code> by default, so your agent can delegate work to Antigravity / Gemini. Opt-in flags add the scoped delegation tools above, plus <code>agy_public_research</code> (<code>--enable-public-research</code>).</p>
   </div>
 </section>
 
