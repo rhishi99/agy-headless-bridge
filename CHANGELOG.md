@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Opt-in `AGY_BRIDGE_ON_QUOTA` hook: on a spent quota the bridge runs this
+  shell command once (for example an account swap) and, if it exits 0,
+  retries the run once.
+
+### Fixed
+- `uv.lock` now records the package's own version (was 1.4.0).
+
 ## [1.6.1] — 2026-11-28
 
 ### Fixed
