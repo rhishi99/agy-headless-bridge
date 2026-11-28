@@ -172,6 +172,19 @@ AGY inference calls: 0</pre>
       <button type="button" id="play-delegation" aria-controls="delegation-flow" hidden>Play workflow</button>
       <a href="https://github.com/rhishi99/agy-headless-bridge/blob/main/docs/DELEGATION.md">Set up the demos in Claude Code or Codex</a>
     </div>
+    <h3 style="margin-top:34px">More delegated tools (v1.6.0)</h3>
+    <video src="assets/demo.mp4" autoplay muted loop playsinline controls style="width:100%;border:1px solid var(--line);border-radius:8px;margin-top:12px" aria-label="Live run of the five v1.6.0 delegation tools"></video>
+    <p style="color:var(--mut);font-size:14px">Real MCP calls against AGY 1.5.18 on a demo workspace; waits shortened.</p>
+    <table>
+      <thead><tr><th>Tool</th><th>Server flag</th><th>Returns</th></tr></thead>
+      <tbody>
+        <tr><td><code>agy_summarize_document</code></td><td><code>--delegation-root</code></td><td>Answers over Markdown, text, <code>.log</code> and <code>.out</code> files, with quotes checked against the cited lines</td></tr>
+        <tr><td><code>agy_git_diff</code> with <code>review: true</code></td><td><code>--enable-git</code></td><td>Review findings tied to changed lines (added, or beside a deletion) the bridge confirmed in the diff</td></tr>
+        <tr><td><code>agy_find_code</code></td><td><code>--enable-code-search</code></td><td><code>file:line</code> citations verified against the workspace</td></tr>
+        <tr><td><code>agy_run_tests</code> recipes</td><td><code>--enable-recipe ruff|npm-test|cargo-test</code></td><td>Exit code and a bounded failure excerpt, run locally with no model call</td></tr>
+        <tr><td><code>agy_inspect_media</code></td><td><code>--delegation-root</code></td><td>Answers about up to four PNG or MP4 files, each claim with an image or timestamp locator</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -349,7 +362,7 @@ scope where it was defined.</pre>
   <span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"id"</span>: 2,
   <span class="s">"result"</span>: { <span class="s">"content"</span>: [ { <span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"&lt;agy's cleaned answer&gt;"</span> } ] }
 }</pre>
-    <p style="color:var(--mut);font-size:14px">Both tools take one required <code>string</code> arg — <code>agy_ask(prompt)</code>, <code>agy_research(query)</code>. On failure the <code>text</code> is an <code>[agy-mcp] ERROR: …</code> string, not a JSON-RPC error, so the agent always gets a readable reply.</p>
+    <p style="color:var(--mut);font-size:14px"><code>agy_ask</code> and <code>agy_research</code> each take one required <code>string</code> arg — <code>agy_ask(prompt)</code>, <code>agy_research(query)</code>. On failure the <code>text</code> is an <code>[agy-mcp] ERROR: …</code> string, not a JSON-RPC error, so the agent always gets a readable reply.</p>
 
     <h3>Troubleshooting</h3>
     <table>
@@ -454,7 +467,7 @@ agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
     <h3>As an MCP server (Claude Code, etc.)</h3>
     <pre><span class="k">claude</span> mcp add --transport stdio antigravity -- \
     python -m agy_headless_bridge.mcp_server</pre>
-    <p style="color:var(--mut);font-size:14px;margin-top:8px">Exposes two tools — <code>agy_ask</code> and <code>agy_research</code> — so your agent can delegate work to Antigravity / Gemini.</p>
+    <p style="color:var(--mut);font-size:14px;margin-top:8px">Exposes <code>agy_ask</code> and <code>agy_research</code> by default, so your agent can delegate work to Antigravity / Gemini. Opt-in flags add the scoped delegation tools above, plus <code>agy_public_research</code> (<code>--enable-public-research</code>).</p>
   </div>
 </section>
 
@@ -468,7 +481,7 @@ agy-bridge <span class="s">"reply with exactly: OK"</span></pre>
       <div class="feat"><div class="ic">🧼</div><h4>Clean output</h4><p>Strips CSI/OSC escapes, collapses <code>\r</code> spinner repaints, drops box-drawing chrome — you get just the answer.</p></div>
       <div class="feat"><div class="ic">⏱️</div><h4>Timeout-safe</h4><p>Configurable <code>AGY_BRIDGE_TIMEOUT</code>; kills a runaway agy and raises instead of hanging.</p></div>
       <div class="feat"><div class="ic">🔎</div><h4>Auto-discovery</h4><p><code>$AGY_PATH</code> → <code>PATH</code> → OS default install locations. No hardcoded paths.</p></div>
-      <div class="feat"><div class="ic">✅</div><h4>Tested</h4><p>Unit tests for cleaning &amp; discovery always run; a live agy round-trip auto-skips when agy is absent.</p></div>
+      <div class="feat"><div class="ic">✅</div><h4>Tested</h4><p>199 unit tests cover cleaning, discovery and every delegated tool; a live agy round-trip auto-skips when agy is absent.</p></div>
     </div>
   </div>
 </section>

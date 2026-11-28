@@ -479,8 +479,12 @@ def test_changed_lines_parses_two_file_excerpt():
         "@@ -3 +3 @@\n"
         "-old\n"
         "+new\n"
+        "@@ -8,2 +7,0 @@\n"
+        "-guard\n"
+        "-check\n"
     )
-    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3}}
+    # A deletion-only hunk has no added line; AGY cites the lines either side of the gap.
+    assert _delegation._changed_lines(excerpt) == {"a.py": {5, 6}, "b.py": {3, 7, 8}}
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
@@ -614,6 +618,41 @@ def test_find_code_stages_only_the_selected_file(agy_catalog, monkeypatch, tmp_p
                        question="Where is it?", paths=["pkg/a.py"])
     assert result["status"] == "partial"
     assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
+
+
+def test_find_code_prompt_lists_scope_files(agy_catalog, monkeypatch, tmp_path):
+    # Live agy 1.5.18 plan mode can only read exact paths, so the prompt must name the files.
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("secret = 1", encoding="utf-8")
+    seen = []
+
+    def run(prompt, **options):
+        seen.append(prompt)
+        return bridge.AgyResult("", structured_output={"summary": "None.", "gaps": [], "evidence": []})
+
+    monkeypatch.setattr(bridge, "run_result", run)
+    invoke(session(tmp_path, code_search_enabled=True), "agy_find_code", question="Where is x?")
+    assert "pkg/a.py" in seen[0] and ".git" not in seen[0]
+
+
+def test_find_code_file_list_skips_dependency_dirs(agy_catalog, monkeypatch, tmp_path):
+    # node_modules/.venv sort before src and would fill the 300-file cap.
+    for folder in ("node_modules/lib", ".venv/lib", "pkg/__pycache__"):
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "junk.py").write_text("y = 2", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1", encoding="utf-8")
+    seen = []
+
+    def run(prompt, **options):
+        seen.append(prompt)
+        return bridge.AgyResult("", structured_output={"summary": "None.", "gaps": [], "evidence": []})
+
+    monkeypatch.setattr(bridge, "run_result", run)
+    invoke(session(tmp_path, code_search_enabled=True), "agy_find_code", question="Where is x?")
+    assert "src/app.py" in seen[0] and "junk.py" not in seen[0]
 
 
 def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tmp_path):

@@ -22,6 +22,10 @@ Codename **PtyGravity** · pty + antiGravity
 or observed pytest results in a bounded MCP response. The guide includes registration
 for Claude Code and Codex and two synthetic demos.
 
+<img src="https://raw.githubusercontent.com/rhishi99/agy-headless-bridge/main/docs/assets/demo.gif" width="860" alt="Live run of the v1.6.0 delegation tools: log summary, diff review, code search, ruff recipe and image inspection, each returning a verified bounded result">
+
+<sub>Real MCP calls against AGY 1.5.18 on a demo workspace; waits shortened. <a href="docs/assets/demo.mp4">MP4</a></sub>
+
 </div>
 
 ---
@@ -395,7 +399,8 @@ and [MCP cancellation](https://modelcontextprotocol.io/specification/2024-11-05/
 Start `agy-mcp-server --delegation-root /absolute/workspace` to opt in to
 `agy_preflight` and `agy_summarize_document`. Add `--enable-pytest` for the
 fixed local test recipe and `--retain-delegation-artifacts` for bounded
-log excerpts. Document summaries use the selected AGY model. Pytest runs
+log excerpts. Documents can be Markdown, text, `.log` or `.out` files.
+Document summaries use the selected AGY model. Pytest runs
 locally, with model summaries available on request for failures.
 `agy_inspect_media` answers questions about up to four workspace PNG images or MP4
 videos (64 MiB combined). Claims carry an image or timestamp locator. The
@@ -405,6 +410,11 @@ Add `--enable-code-search` to register `agy_find_code`, which locates code and r
 file:line citations the bridge verified against the workspace. AGY can read every
 file in the selected scope (the whole workspace by default), including untracked
 files such as `.env`, so enable it only for workspaces whose contents may go to Google.
+Add `--enable-git` to register `agy_git_diff`: tracked changes against a local
+revision, with `summarize: true` for an AGY risk summary or `review: true` for
+findings the bridge checked against the changed lines.
+Add `--enable-public-research` to register `agy_public_research`, which needs
+`network: true` on each call and returns source URLs with the claims they support.
 
 The default response budget is 2,000 characters. See the
 [delegation guide](docs/DELEGATION.md) for client commands, exact options,
