@@ -616,6 +616,23 @@ def test_find_code_stages_only_the_selected_file(agy_catalog, monkeypatch, tmp_p
     assert [ref["path"] for ref in result["evidence"]] == ["pkg/a.py"]
 
 
+def test_find_code_prompt_lists_scope_files(agy_catalog, monkeypatch, tmp_path):
+    # Live agy 1.5.18 plan mode can only read exact paths, so the prompt must name the files.
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("secret = 1", encoding="utf-8")
+    seen = []
+
+    def run(prompt, **options):
+        seen.append(prompt)
+        return bridge.AgyResult("", structured_output={"summary": "None.", "gaps": [], "evidence": []})
+
+    monkeypatch.setattr(bridge, "run_result", run)
+    invoke(session(tmp_path, code_search_enabled=True), "agy_find_code", question="Where is x?")
+    assert "pkg/a.py" in seen[0] and ".git" not in seen[0]
+
+
 def test_find_code_rejects_bad_paths_and_maps_quota(agy_catalog, monkeypatch, tmp_path):
     scope = session(tmp_path, code_search_enabled=True)
     result, _ = invoke(scope, "agy_find_code", question="q", paths=["../x"])

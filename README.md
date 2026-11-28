@@ -22,6 +22,10 @@ Codename **PtyGravity** · pty + antiGravity
 or observed pytest results in a bounded MCP response. The guide includes registration
 for Claude Code and Codex and two synthetic demos.
 
+<img src="https://raw.githubusercontent.com/rhishi99/agy-headless-bridge/main/docs/assets/demo.gif" width="860" alt="Live run of the v1.6.0 delegation tools: log summary, diff review, code search, ruff recipe and image inspection, each returning a verified bounded result">
+
+<sub>Real MCP calls against AGY 1.5.18 on a demo workspace; waits shortened. <a href="docs/assets/demo.mp4">MP4</a></sub>
+
 </div>
 
 ---
