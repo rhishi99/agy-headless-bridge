@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-11-28
+
 ### Fixed
 
 - `agy_find_code` lists the files in scope (up to 300; hidden folders, `node_modules` and `__pycache__` skipped) in its
@@ -287,7 +289,8 @@ First public release.
 - Model selection inside `agy` is out of scope (pair with the `antigravity-cc`
   Claude Code plugin).
 
-[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/rhishi99/agy-headless-bridge/compare/v1.5.0...v1.5.1
 [1.2.1]: https://github.com/rhishi99/agy-headless-bridge/releases/tag/v1.2.1
